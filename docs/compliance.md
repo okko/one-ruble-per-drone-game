@@ -55,8 +55,10 @@ These were reviewed and **kept**; authors must keep their framing pointed at the
 system/situation, never at Russian people:
 - The vice meter and vodka/cigarette satisfiers, incl. the veteran "Old Dmitri" vodka
   service and the "drunk" debuff (`02-meters-and-status`, `03-economy-and-residents`,
-  `game-design §5`). Keep vodka a coping need — not a character's identity or a
-  national joke.
+  `game-design §5`). **Reframed (good example):** Dmitri's drinking and bitterness
+  stem from how the army used and discarded him — coping and bitter solidarity with
+  the conscript, with the satire aimed at the military institution. Keep vodka a
+  coping need — never a character's identity, an ethnic trait, or a national joke.
 - Degraded-favor flavor — plumber "bucket in the hall", chef "burnt scraps", babushka
   "three days old" leftovers (`03-economy-and-residents §5`). Keep the humor about the
   soldier's exploited desperation, not civilian poverty/dirtiness.

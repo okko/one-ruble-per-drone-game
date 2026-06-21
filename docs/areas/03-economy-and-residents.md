@@ -222,7 +222,7 @@ applyRelief: (req: ReliefRequest, qualityFactor?: number) => void;
 | `babushka` | Galina Petrovna | 3 | warm, terrifying | Famous Stew −45 hunger (4₽); Strong Tea −20 thirst/−10 sleep (2₽) | "Leftovers" −27 hunger **degraded** (×0.6, +12 💩 — it's three days old) |
 | `plumber` | Sergei the Plumber | 7 | gloomy realist | Toilet Access −60 💩 (3₽, tag `toilet`); Pipe Wisdom (pep) −8 sleep (1₽) | Bucket in the hall −40 💩 **reputation** (−10; the neighbors saw) |
 | `oligarch` | Mr. Volkov | 22 (penthouse) | smug, generous-for-show | Imported Water −50 thirst (5₽); Cuban Cigar −60 vice (6₽); Nap Suite −70 sleep (8₽, tag `nap`) | Loan **debt** (+10₽ debt; "you'll pay me back, soldier") |
-| `veteran` | Old Dmitri | 5 | grizzled, kind | Vodka Shot −70 vice/−15 sleep, drunk debuff (3₽); Pep Talk −12 sleep (1₽) | Shared flask −50 vice **degraded** (×0.7, +6 sleep — it's mostly water) |
+| `veteran` | Old Dmitri | 5 | grizzled; gentle with you, bitter at the army that used him up and discarded him | Vodka Shot −70 vice/−15 sleep, drunk debuff (3₽) — how he drowns what the army made him do; Pep Talk −12 sleep (1₽) — bitter solidarity ("they'll throw you away too, soldier") | Shared flask −50 vice **degraded** (×0.7, +6 sleep — mostly water; his army pension won't stretch to more) |
 | `chef` | Café Below (Anya) | 1 | bubbly | Hot Pelmeni −55 hunger (5₽, tag `delivery`); Kvass −35 thirst (3₽, tag `delivery`) | Burnt scraps −25 hunger **chore** (12s — you fetch them yourself) |
 | `mechanic` | Iron Lyuba | 9 | brusque | Clear Gun Jam (gun fix, tag `gun`) (4₽); Spare Cigarette −40 vice (2₽) | Jam-clear IOU **debt** (+6₽ debt) |
 | `student` | Kostya upstairs | 14 | anxious insomniac | Energy Drink −30 sleep, vice +5 (3₽); Cigarette −40 vice (2₽) | Bummed smoke −25 vice **reputation** (−6) |
@@ -235,6 +235,12 @@ Notes:
   auto-defend window); modeled as a relief plus a flag.
 - `gun` services clear a gun jam (Gameplay Engine reads the resulting flag/event).
 - All numbers are starter values for the balance pass; tuned in playtest.
+- **Old Dmitri (veteran) framing — compliance:** his drinking and bitterness are the
+  result of how the army used and discarded him, never an ethnic trait. The vodka is
+  coping; his pep talks are bitter solidarity with the fellow conscript. Keep his
+  satire aimed at the military institution, not at Russian people (see
+  `docs/compliance.md`). His dialog should make the army the target — e.g. "Twenty
+  years I gave them. A ruble and a bad knee is what I got back."
 
 A `validateResidents()` content-validator (unit-tested) asserts: unique ids, prices
 ≥ 1, reliefs reference valid meters and stay within 0–100, every favor has a valid
