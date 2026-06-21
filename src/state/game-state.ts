@@ -52,6 +52,10 @@ export interface ScoringState {
 }
 
 // ---- Area 05: Random Incidents --------------------------------------------------------------
+// The documented four-phase lifecycle contract (docs/areas/05 §3.2/§4). The current scheduler runs
+// `telegraph` → `active` and finalizes synchronously on expiry/resolution (it never parks an
+// incident in `resolving`/`cleanup`); those two are reserved for the contract and a future Engine
+// that may need an observable wind-down window. See docs/phase-2-implementation.md (deviations).
 export type IncidentPhase = 'telegraph' | 'active' | 'resolving' | 'cleanup';
 export type IncidentCategory =
   | 'plumbing'
