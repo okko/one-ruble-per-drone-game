@@ -47,6 +47,7 @@ export interface ScoringState {
   bonusModeTimer: number; // seconds remaining of current bonus mode
   skillShotWindow: number; // seconds remaining in open window, 0 if closed
   tidyAccumulator: number; // fractional tidy points pending flush
+  tidyFlushTimer: number; // seconds since the last tidy flush (throttles emission to ~1/s)
   activeIncidentId: string | null;
 }
 

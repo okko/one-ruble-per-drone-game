@@ -8,9 +8,13 @@ import type { MeterKey } from '../types/meter-key';
 
 export interface GameEvents {
   droneSpawned: { id: number; kind: string };
-  droneDestroyed: { id: number; kind: string; byPlayer: boolean; pos: Vec2 };
+  // `colorTag` (optional) marks a "special" coloured drone for the Scoring jackpot sequence
+  // (docs/areas/04-scoring.md §3.3); ordinary drones omit it. Additive, lead-approved.
+  droneDestroyed: { id: number; kind: string; byPlayer: boolean; pos: Vec2; colorTag?: string };
   droneEscaped: { id: number; damage: number }; // hit the building
   shotFired: { from: Vec2; angle: number };
+  // Opens the Scoring skill-shot window at the start of a wave (docs/areas/04-scoring.md §3.5).
+  waveStarted: Record<string, never>;
   rublesChanged: { delta: number; total: number };
   meterCrisis: { meter: MeterKey; entered: boolean };
   serviceBought: { residentId: string; service: string; cost: number };

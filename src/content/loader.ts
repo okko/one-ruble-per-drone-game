@@ -11,14 +11,18 @@ import { validateMeterBalance } from './meters-validate';
 import { meterBalance } from './meters';
 import { validateResidents, validateEconomyTunables } from './residents-validate';
 import { RESIDENTS, ECONOMY_TUNABLES } from './residents';
+import { validateScoringBalance } from './scoring-validate';
+import { scoringBalance } from './scoring';
 import type { AssetManifest } from './assets';
 import type { MeterBalance } from './meters';
 import type { ResidentDef, EconomyTunables } from './residents';
+import type { ScoringBalance } from './scoring';
 
 export interface Content {
   manifest: AssetManifest;
   meters: MeterBalance; // area 02 balance table
   economy: { roster: ResidentDef[]; tunables: EconomyTunables }; // area 03
+  scoring: ScoringBalance; // area 04
 }
 
 export function loadContent(raw: unknown): Content {
@@ -32,5 +36,6 @@ export function loadContent(raw: unknown): Content {
     roster: validateResidents(RESIDENTS),
     tunables: validateEconomyTunables(ECONOMY_TUNABLES),
   };
-  return { manifest, meters, economy };
+  const scoring = validateScoringBalance(scoringBalance);
+  return { manifest, meters, economy, scoring };
 }
