@@ -225,6 +225,19 @@ export function applyRelief(
   }
 }
 
+/**
+ * Set the transient drunk timer (vodka side effect) without re-applying vice/sleep deltas — used by
+ * the economy relief-bridge so a roster-authored vodka relief keeps its own magnitudes (plan D3).
+ */
+export function setDrunk(m: MetersState, ctx: SystemContext, quality = 1): void {
+  m.drunkTimer = ctx.content.meters.relief.drunkSeconds * quality;
+}
+
+/** Set the coffee timer (temporary sleep-gain relief) — used by the bridge for `effect:'coffee'`. */
+export function setCoffee(m: MetersState, ctx: SystemContext): void {
+  m.coffeeTimer = ctx.content.meters.relief.coffeeSeconds;
+}
+
 /** Read-only debuff aggregation (§3.3). Consumers read; never write. */
 export function computeEffects(m: MetersState, balance: MeterBalance): MeterEffects {
   const E = balance.effects;
