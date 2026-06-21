@@ -1,0 +1,21 @@
+# OS
+.DS_Store
+
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+
+# Test / coverage
+coverage/
+
+# Logs & env
+*.log
+.env
+.env.*
+
+# Editor
+.vscode/
+.idea/
