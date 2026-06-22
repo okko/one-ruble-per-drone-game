@@ -40,12 +40,14 @@ test('tap starts a run; held fire sweeping the sky destroys a drone; release cea
   await page.goto('/');
   const canvas = page.locator('#game');
   await expect(canvas).toBeVisible();
-  await page.waitForTimeout(150); // let Boot route to the start menu
+  await page.waitForTimeout(150); // let Boot route to the Main Menu
 
-  // A tap on the start menu begins a run (MainMenu → Playing). The tap goes to the menu, so the
-  // Playing scene starts with no pointer aim — keyboard control then drives the gun (no reliance on
-  // the exact pointer→world mapping, and it stays valid on the touch-only iPhone project too).
+  // The Main Menu opens with "Start New Shift" pre-selected. The tap is the first gesture (it unlocks
+  // audio; it lands on empty menu space, not an option), then Enter begins a run (MainMenu → Playing).
+  // Starting from the keyboard leaves the Playing scene with no pointer aim, so keyboard control then
+  // drives the gun (no reliance on the pointer→world mapping, and it stays valid on touch-only iPhone).
   await canvas.click({ position: { x: 40, y: 40 } });
+  await page.keyboard.press('Enter');
 
   const readState = (): Promise<{ downed: number; aim: number; drones: Array<{ x: number; y: number }> }> =>
     page.evaluate(() => {
@@ -124,7 +126,9 @@ test('HUD meter-icon row matches the committed snapshot per engine (area 10, §8
 
   // Start a run so the HUD overlay renders, then snapshot IMMEDIATELY — before the first drone spawns —
   // so only the static, procedural meter icons (😴🍞💧🚬💩) sit in the clipped column (no live bars/drones).
+  // "Start New Shift" is pre-selected on the Main Menu; Enter begins the run (the tap just unlocks audio).
   await canvas.click({ position: { x: 40, y: 40 } });
+  await page.keyboard.press('Enter');
   await page.waitForTimeout(120);
 
   const box = await canvas.boundingBox();

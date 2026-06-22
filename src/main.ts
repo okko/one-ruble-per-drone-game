@@ -11,6 +11,7 @@ import { loadContent } from './content/loader';
 import { createStorage } from './persistence/storage';
 import { createMetaStatsRepo } from './persistence/meta-stats-repo';
 import { createSettingsRepo } from './persistence/settings-repo';
+import { createHighscoresRepo } from './persistence/highscores-repo';
 import { wireGameOver } from './persistence/gameover-wiring';
 import { createWebAudioBackend, type AudioSettings } from './audio/backend';
 import { createAudioEngine } from './audio/engine';
@@ -22,9 +23,12 @@ import { createPlaceholderProvider, createManifestProvider } from './render/spri
 import { createInput } from './input/input';
 import { createSceneManager } from './state/scene-manager';
 import { createBootScene } from './state/boot-scene';
-import { createPlaceholderScene } from './state/placeholder-scene';
-import { createStartScene } from './state/start-scene';
 import { createPlayingScene } from './state/playing-scene';
+import { createSettingsScene } from './state/settings-scene';
+import { createGameOverScene } from './state/game-over-scene';
+import { createMainMenuScene } from './ui/main-menu-scene';
+import { createHighscoreEntryScene } from './ui/highscores/entry-scene';
+import { createHighscoresListScene } from './ui/highscores/list-scene';
 import manifestJson from './content/assets.manifest.json';
 import type { SystemContext } from './core/system-context';
 import type { GameState } from './state/game-state';
@@ -37,6 +41,8 @@ declare global {
     __combat?: { dronesDowned: number; drones: Array<{ x: number; y: number }>; aimAngle: number };
     // Mirrors the live AudioContext state for the WebKit unlock smoke (tests/e2e). Harmless in prod.
     __audio?: { readonly state: string };
+    // Mirrors the active scene id for the shell smoke (tests/e2e/menu). Harmless in prod.
+    __scene?: { readonly id: string };
   }
 }
 
@@ -56,7 +62,9 @@ function main(): void {
   // Persistence.
   const storage = createStorage();
   const meta = createMetaStatsRepo(storage);
-  const settings = createSettingsRepo(storage).get();
+  const highscores = createHighscoresRepo(storage);
+  const settingsRepo = createSettingsRepo(storage);
+  const settings = settingsRepo.get();
   const settingsView: SettingsView = {
     reducedFlash: settings.accessibility.reducedFlash,
     largeHudText: settings.accessibility.largeHud,
@@ -90,9 +98,10 @@ function main(): void {
   // HUD (area 10): the economy selector adapter the resident panel reads.
   const hudEconomy = createHudEconomy(content);
 
-  // Scene machine + the reachable scenes. The Gameplay Engine (area 01) owns Playing; GameOver is a
-  // placeholder until the GameOver/Highscores areas (Phase 5) land — registered so `wireGameOver`'s
-  // transition has a target. MainMenu is a minimal "press to start" until the Main Menu area lands.
+  // Scene machine + the reachable scenes (Phase 5 shell). The Gameplay Engine (area 01) owns Playing;
+  // the Main Menu (07), Highscores entry/list (08), and the Settings stub now wrap it, and GameOver
+  // (08) qualifies the finished run and routes to name entry or the list. `wireGameOver` records the
+  // run + transitions to GameOver, which recovers the full run summary from `meta.lastRun`.
   const combatDebug: NonNullable<Window['__combat']> = { dronesDowned: 0, drones: [], aimAngle: 0 };
   window.__combat = combatDebug;
   const onState = (gs: GameState): void => {
@@ -102,12 +111,33 @@ function main(): void {
   };
 
   const manager = createSceneManager(ctx, 'Boot');
+  window.__scene = {
+    get id(): string {
+      return manager.active;
+    },
+  };
   manager.register('Boot', () => createBootScene(manager, meta));
-  manager.register('MainMenu', () => createStartScene(() => manager.transition('Playing')));
+  manager.register('MainMenu', () =>
+    createMainMenuScene({ sceneManager: manager, audio, settings: settingsRepo, highscores }),
+  );
   manager.register('Playing', () =>
     createPlayingScene({ onState, hud: { settings: settingsView, economy: hudEconomy }, audio }),
   );
-  manager.register('GameOver', () => createPlaceholderScene('GAME OVER', 'refresh to play again'));
+  manager.register('Settings', () => createSettingsScene(manager));
+  manager.register('GameOver', () =>
+    createGameOverScene({ sceneManager: manager, repo: highscores, meta, audio }),
+  );
+  manager.register('HighscoreEntry', () =>
+    createHighscoreEntryScene({
+      sceneManager: manager,
+      repo: highscores,
+      now: () => new Date().toISOString(),
+      audio,
+    }),
+  );
+  manager.register('Highscores', () =>
+    createHighscoresListScene({ sceneManager: manager, repo: highscores, audio }),
+  );
   wireGameOver(events, manager, meta);
 
   // Input (the audio-unlock hook is consumed by the Audio area in a later phase).
