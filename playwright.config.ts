@@ -22,6 +22,8 @@ export default defineConfig({
     { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
     { name: 'firefox', use: { ...devices['Desktop Firefox'] } },
     { name: 'webkit', use: { ...devices['Desktop Safari'] } },
-    { name: 'mobile-webkit', use: { ...devices['iPhone 13'] } },
+    // The game is landscape-only (a portrait viewport surfaces the rotate prompt), so the emulated
+    // iPhone runs in landscape — otherwise the rotate overlay covers the canvas and blocks input.
+    { name: 'mobile-webkit', use: { ...devices['iPhone 13 landscape'] } },
   ],
 });

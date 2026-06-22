@@ -15,11 +15,17 @@ import { validateScoringBalance } from './scoring-validate';
 import { scoringBalance } from './scoring';
 import { validateIncidentCatalog, validateSchedulerTunables } from './incidents-validate';
 import { INCIDENTS, schedulerTunables } from './incidents';
+import { validateDrones } from './drones-validate';
+import { DRONES } from './drones';
+import { validateCombatBalance } from './balance-validate';
+import { combatBalance } from './balance';
 import type { AssetManifest } from './assets';
 import type { MeterBalance } from './meters';
 import type { ResidentDef, EconomyTunables } from './residents';
 import type { ScoringBalance } from './scoring';
 import type { IncidentDef, SchedulerTunables } from './incidents';
+import type { DroneDef } from './drones';
+import type { CombatBalance } from './balance';
 
 export interface Content {
   manifest: AssetManifest;
@@ -27,6 +33,8 @@ export interface Content {
   economy: { roster: ResidentDef[]; tunables: EconomyTunables }; // area 03
   scoring: ScoringBalance; // area 04
   incidents: { catalog: IncidentDef[]; scheduler: SchedulerTunables }; // area 05
+  drones: DroneDef[]; // area 01 catalog
+  combat: CombatBalance; // area 01 spawn/gun/scaling tunables
 }
 
 export function loadContent(raw: unknown): Content {
@@ -45,5 +53,7 @@ export function loadContent(raw: unknown): Content {
     catalog: validateIncidentCatalog(INCIDENTS),
     scheduler: validateSchedulerTunables(schedulerTunables),
   };
-  return { manifest, meters, economy, scoring, incidents };
+  const drones = validateDrones(DRONES);
+  const combat = validateCombatBalance(combatBalance);
+  return { manifest, meters, economy, scoring, incidents, drones, combat };
 }

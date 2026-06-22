@@ -8,6 +8,7 @@ import { createMetersState } from '../systems/meters';
 import { createScoringState } from '../systems/scoring';
 import { createEconomyState } from '../systems/economy';
 import { createIncidentsState } from '../systems/incidents';
+import { createCombatState } from '../systems/combat/combat';
 import type { GameState } from './game-state';
 import type { Content } from '../content/loader';
 
@@ -16,7 +17,7 @@ export function createGameState(content: Content, seed: number): GameState {
     time: { shiftSeconds: 0, phase: 'day', difficulty: 0 },
     player: { rubles: 0, debt: 0, reputation: 0 },
     meters: createMetersState(),
-    combat: {},
+    combat: createCombatState(content),
     scoring: createScoringState(),
     economy: createEconomyState(content),
     incidents: createIncidentsState(content),

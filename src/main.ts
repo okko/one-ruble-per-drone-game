@@ -18,8 +18,20 @@ import { createInput } from './input/input';
 import { createSceneManager } from './state/scene-manager';
 import { createBootScene } from './state/boot-scene';
 import { createPlaceholderScene } from './state/placeholder-scene';
+import { createStartScene } from './state/start-scene';
+import { createPlayingScene } from './state/playing-scene';
 import manifestJson from './content/assets.manifest.json';
 import type { SystemContext } from './core/system-context';
+import type { GameState } from './state/game-state';
+
+// Diagnostic hook for the cross-browser e2e (tests/e2e): live drone positions + the downing count,
+// so the WebKit/iPhone smoke test can aim at a real drone and assert it was destroyed. Harmless in
+// production; it only mirrors already-public game state.
+declare global {
+  interface Window {
+    __combat?: { dronesDowned: number; drones: Array<{ x: number; y: number }>; aimAngle: number };
+  }
+}
 
 function main(): void {
   const canvas = document.getElementById('game') as HTMLCanvasElement | null;
@@ -43,10 +55,22 @@ function main(): void {
   const sprites = createManifestProvider(content.manifest, createPlaceholderProvider());
   const renderer = createCanvasRenderer(ctx2d, sprites);
 
-  // Scene machine + the Phase-1 reachable scenes.
+  // Scene machine + the reachable scenes. The Gameplay Engine (area 01) owns Playing; GameOver is a
+  // placeholder until the GameOver/Highscores areas (Phase 5) land — registered so `wireGameOver`'s
+  // transition has a target. MainMenu is a minimal "press to start" until the Main Menu area lands.
+  const combatDebug: NonNullable<Window['__combat']> = { dronesDowned: 0, drones: [], aimAngle: 0 };
+  window.__combat = combatDebug;
+  const onState = (gs: GameState): void => {
+    combatDebug.dronesDowned = gs.combat.dronesDowned;
+    combatDebug.drones = gs.combat.drones.map((d) => ({ x: d.pos.x, y: d.pos.y }));
+    combatDebug.aimAngle = gs.combat.aim.effectiveAngle;
+  };
+
   const manager = createSceneManager(ctx, 'Boot');
   manager.register('Boot', () => createBootScene(manager, meta));
-  manager.register('MainMenu', () => createPlaceholderScene('ONE RUBLE PER DRONE', '1 ₽ / drone'));
+  manager.register('MainMenu', () => createStartScene(() => manager.transition('Playing')));
+  manager.register('Playing', () => createPlayingScene({ onState }));
+  manager.register('GameOver', () => createPlaceholderScene('GAME OVER', 'refresh to play again'));
   wireGameOver(events, manager, meta);
 
   // Input (the audio-unlock hook is consumed by the Audio area in a later phase).

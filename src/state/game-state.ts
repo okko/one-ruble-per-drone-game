@@ -11,6 +11,7 @@
  */
 import type { RngState } from '../core/rng';
 import type { MeterKey } from '../types/meter-key';
+import type { Vec2 } from '../core/math';
 
 // ---- Area 02: Meters ------------------------------------------------------------------------
 export interface MetersState {
@@ -95,8 +96,80 @@ export interface IncidentsState {
   flags: IncidentFlags;
 }
 
-// ---- Area 01: Gameplay Engine (placeholder — refined later) ---------------------------------
-export type CombatState = Record<string, never>; // refined by area 01 (Gameplay Engine)
+// ---- Area 01: Gameplay Engine ---------------------------------------------------------------
+// Slice + sub-types refined by the Gameplay Engine. Drones/projectiles are plain arrays (the spec §4
+// interface), not the ECS registry, so `CombatState` stays a serializable POJO for the golden. The
+// drone catalog (`content/drones.ts`) and combat balance (`content/balance.ts`) import `MovementKind`
+// from here, mirroring how `content/scoring.ts` imports `MultiplierStep`.
+export type MovementKind = 'straight' | 'zigzag' | 'kamikaze' | 'wander' | 'boss';
+
+/** Per-drone movement parameters; pos/vel are pure functions of these + `elapsed` (§3.3). */
+export interface MovementProfile {
+  kind: MovementKind;
+  speed: number; // px/s, already scaled by difficulty at spawn
+  origin: Vec2; // spawn position
+  target: Vec2; // homing destination (the post); `wander` ignores it
+  amplitude: number; // zigzag lateral swing (px)
+  frequency: number; // zigzag / wander oscillation (Hz)
+  phase: number; // seeded phase offset (rad)
+  accel: number; // kamikaze acceleration (px/s^2)
+  elapsed: number; // seconds since spawn
+}
+
+export interface Drone {
+  id: number;
+  kind: string; // key into content/drones (and scoring basePoints)
+  pos: Vec2;
+  vel: Vec2;
+  hp: number;
+  maxHp: number;
+  radius: number;
+  movement: MovementProfile;
+  escapeDamage: number;
+  awardsRuble: boolean; // false for decoy_bird
+  colorTag?: string; // jackpot letter, if the director tagged this drone
+}
+
+export interface Projectile {
+  id: number;
+  pos: Vec2;
+  prev: Vec2; // previous-tick position, for swept collision (no tunneling)
+  vel: Vec2;
+  ttl: number; // seconds remaining before despawn
+  radius: number;
+}
+
+export interface GunState {
+  pivot: Vec2;
+  angle: number; // current barrel angle (rad)
+  heat: number; // 0..100
+  overheated: boolean; // locked until heat falls below cooloffResume
+  jammed: boolean;
+  jamClearProgress: number; // accumulates toward the clear threshold
+  fireCooldown: number; // seconds until the next shot is allowed
+  firing: boolean;
+  swayPhase: number; // per-run aim-sway phase, seeded once at run start
+  recentShotRate: number; // 0..1 EWMA of firing; read by Meters via MetersRead (not on MetersState)
+}
+
+export interface SpawnDirectorState {
+  timer: number; // seconds until the next spawn roll
+  /** Incident forced-wave override (set/cleared by `applySpawnOverride`). */
+  override: { spawnMultiplier: number; queuedBoss: boolean } | null;
+}
+
+export interface CombatState {
+  drones: Drone[];
+  projectiles: Projectile[];
+  gun: GunState;
+  aim: { desiredAngle: number; effectiveAngle: number };
+  postIntegrity: number; // 0..100, starts at max
+  director: SpawnDirectorState;
+  nextDroneId: number;
+  nextProjectileId: number;
+  dronesDowned: number; // run stat (feeds MetersRead + gameOver payload)
+  gameOverEmitted: boolean; // post-destroyed guard (combat-local; the engine adds a run-level latch)
+}
 
 export interface GameState {
   time: { shiftSeconds: number; phase: 'day' | 'night'; difficulty: number };
