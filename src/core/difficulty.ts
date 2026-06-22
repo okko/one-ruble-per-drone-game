@@ -23,3 +23,14 @@ export function phaseAt(shiftSeconds: number, ramp: DifficultyRamp): 'day' | 'ni
   const halfCycle = Math.floor(Math.max(0, shiftSeconds) / ramp.dayLengthSeconds);
   return halfCycle % 2 === 0 ? 'day' : 'night';
 }
+
+/**
+ * Continuous daylight in [0,1] for RENDER ONLY (docs/areas/11-art-visual-style.md §3.5): a cosine
+ * over the day+night period peaking at mid-day (≈1), troughing at mid-night (≈0), ~0.5 at dawn/dusk.
+ * Derived from `shiftSeconds` so the combat sim's read-only relationship to `time` is unchanged.
+ */
+export function daylightAt(shiftSeconds: number, ramp: DifficultyRamp): number {
+  const period = ramp.dayLengthSeconds * 2;
+  const phase = (Math.max(0, shiftSeconds) - ramp.dayLengthSeconds / 2) / period;
+  return (Math.cos(phase * 2 * Math.PI) + 1) / 2;
+}

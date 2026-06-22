@@ -14,6 +14,8 @@ export interface SkylineOpts {
   parallax?: number;
   /** Darken the silhouette + drop the sun/windows so overlaid text reads (credits). */
   dim?: boolean;
+  /** Continuous daylight 0..1 (1 = full day). Drives the day/night look in gameplay (Step 5). */
+  daylight?: number;
 }
 
 interface Building {

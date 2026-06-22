@@ -12,7 +12,7 @@ describe('in-memory atlas manifest', () => {
     const manifest = buildAtlasManifest(ART);
     const provider = createManifestProvider(manifest, createPlaceholderProvider());
     expect(provider.resolve('icon.poo').source).toBe('atlas'); // authored in ART
-    expect(provider.resolve('drone.boss').source).toBe('placeholder'); // not yet authored
+    expect(provider.resolve('portrait.ivan').source).toBe('placeholder'); // dynamic id, never in ART
   });
 
   it('produces a manifest that validates against the asset schema (bounds, types)', () => {
