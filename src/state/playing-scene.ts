@@ -1,107 +1,210 @@
 /**
- * The Playing scene (docs/areas/01-gameplay-engine.md §3.1). A THIN shell over the pure engine: it
- * owns the run's `GameState`, buffers input into a `PlayerIntent`, and drives `engine.step` each tick.
- * All gameplay logic lives in `src/systems/combat/*`; this file only adapts the Scene/Input/Renderer
- * edges and composes the Phase-4 presentation overlays:
- *  - the HUD (area 10) is drawn over the world, gets first crack at input (so the resident panel can
- *    consume nav/intercom taps before the gun sees them), and can request a sim pause while open;
- *  - the audio engine (area 06) is advanced each tick (difficulty → music intensity) and told the
- *    active scene. SFX themselves are driven by the event bus inside the engine, not from here.
+ * The Playing scene (docs/areas/01-gameplay-engine.md §3.1, §request). A THIN shell over the pure
+ * engine: it owns the run's `GameState`, drives `engine.step` each tick, and renders the run through the
+ * Three.js world view + the DOM HUD overlay (the old Canvas-2D in-game UI is gone). All gameplay logic
+ * stays in `src/systems/combat/*`; this file adapts the Scene/Input edges and owns the SHOOTING ⇄
+ * INTERIOR mode machine:
+ *  - SHOOTING: aim + fire at the drones (pointer/touch or A/D + Space), exactly as before.
+ *  - INTERIOR: press E to leave the firing post and step down inside the tower; ↑/↓ walk floors, ←/→
+ *    pick a resident interaction, ENTER buys/begs it (routed as a `residentIntent`); stepping back up
+ *    onto the roof (or E again) returns to SHOOTING. The sim keeps running, so being inside during a
+ *    wave is a real risk — that is why drones arrive in spaced waves with a siren.
  * It does NOT handle `gameOver` (the global `wireGameOver` routes to the GameOver scene).
  */
 import { createGameState } from './create-game-state';
 import { createEngine } from '../systems/combat/engine';
-import { createHud } from '../ui/hud/hud';
+import { IDLE_INTENT } from '../systems/combat/types';
 import type { Engine } from '../systems/combat/engine';
-import type { HudImpl } from '../ui/hud/hud';
-import type { SettingsView, HudEconomy } from '../ui/hud/types';
+import type { PlayerIntent } from '../systems/combat/types';
 import type { AudioEngineImpl } from '../audio/engine';
 import type { Scene } from './scene';
 import type { SystemContext } from '../core/system-context';
 import type { InputEvent } from '../input/input';
 import type { Renderer } from '../render/renderer';
-import type { SpriteId } from '../content/sprite-ids';
-import type { DifficultyRamp } from '../core/difficulty';
-import { daylightAt } from '../core/difficulty';
-import { drawSkyline } from '../render/backdrop';
-import { drawIncidentOverlays } from '../render/overlays';
+import type { ResidentDef } from '../content/residents';
 import type { GameState } from './game-state';
 import type { Vec2 } from '../core/math';
+import type { ThreeView } from '../render/three/view';
+import type { GameOverlay } from '../ui/game-overlay';
+import type { HudEconomy, SettingsView, ResidentMenuEntry } from '../ui/hud/types';
+import type { InteriorOption, PlayingViewState, PlayMode } from './playing-view';
 
-/** Engine drone `kind` → atlas sprite id (jackpot-tagged drones use the tintable `drone.special`). */
-function droneSprite(kind: string, tagged: boolean): SpriteId {
-  if (tagged) return 'drone.special';
-  switch (kind) {
-    case 'scout':
-      return 'drone.scout';
-    case 'heavy':
-      return 'drone.armored';
-    case 'kamikaze':
-      return 'drone.bomber';
-    case 'frenzy':
-      return 'drone.swarm';
-    case 'boss':
-      return 'drone.boss';
-    case 'decoy_bird':
-      return 'decoy.bird';
-    default:
-      return 'drone.scout';
-  }
-}
+const TOP_FLOOR = 32; // the firing-post roof sits atop floor 32
+const BOTTOM_FLOOR = 21; // residents occupy the top 12 floors (21–32)
 
-/** Soldier sprite for the current state (crisis > firing > drowsy > idle). */
-function soldierState(gs: GameState): SpriteId {
-  if (Object.values(gs.meters.inCrisis).some(Boolean)) return 'soldier.crisis';
-  if (gs.combat.gun.firing) return 'soldier.fire';
-  if (gs.meters.values.sleep > 60) return 'soldier.tired';
-  return 'soldier.idle';
-}
+const NAV_UP = new Set(['ArrowUp', 'KeyW']);
+const NAV_DOWN = new Set(['ArrowDown', 'KeyS']);
+const NAV_LEFT = new Set(['ArrowLeft', 'KeyA']);
+const NAV_RIGHT = new Set(['ArrowRight', 'KeyD']);
+const CONFIRM = new Set(['Enter', 'NumpadEnter', 'Space']);
 
-/** Optional hooks for the host (main.ts). `onState` is a per-tick diagnostic sink used by the e2e. */
 export interface PlayingSceneOptions {
+  /** Per-tick diagnostic sink used by the cross-browser e2e (`__combat`). */
   onState?: (gs: GameState) => void;
-  /** HUD overlay deps (area 10). Omitted in tests that drive the bare engine. */
-  hud?: { settings: SettingsView; economy: HudEconomy };
   /** Audio engine (area 06): advanced per tick + told the active scene. */
   audio?: Pick<AudioEngineImpl, 'update' | 'setScene'>;
+  /** The Three.js world view (omitted in headless tests — the engine still runs). */
+  view?: ThreeView | undefined;
+  /** The DOM HUD + interaction overlay (omitted in headless tests). */
+  overlay?: GameOverlay | undefined;
+  /** Economy selector for the resident-interaction menu (omitted in bare-engine tests). */
+  economy?: HudEconomy;
+  /** Settings projection (resident-panel key binding + pause-while-visiting accessibility). */
+  settings?: SettingsView;
 }
 
 export function createPlayingScene(opts: PlayingSceneOptions = {}): Scene {
   let gs: GameState | null = null;
   let engine: Engine | null = null;
-  let hud: HudImpl | null = null;
-  let dayRamp: DifficultyRamp | null = null;
+  const occupantByFloor = new Map<number, ResidentDef>();
 
-  // Buffered input intent (translated from the typed InputEvent stream).
+  // Buffered shooting input.
   let aimTarget: Vec2 | null = null;
   let fireHeld = false;
   let left = false;
   let right = false;
 
+  // Interaction state.
+  let mode: PlayMode = 'shooting';
+  let floor = TOP_FLOOR;
+  let selected = 0;
+  let cachedOptions: InteriorOption[] = [];
+
+  const panelKey = (): string => opts.settings?.residentPanelKey ?? 'KeyE';
+
+  function currentResidentEntry(): ResidentMenuEntry | null {
+    const occ = occupantByFloor.get(floor);
+    if (!occ || !gs || !opts.economy) return null;
+    return opts.economy.getAvailableInteractions(gs).residents.find((r) => r.residentId === occ.id) ?? null;
+  }
+
+  function buildOptions(): InteriorOption[] {
+    const entry = currentResidentEntry();
+    if (!entry) return [];
+    return [
+      ...entry.services.map((o) => ({ residentId: entry.residentId, kind: 'service' as const, option: o })),
+      ...entry.favors.map((o) => ({ residentId: entry.residentId, kind: 'favor' as const, option: o })),
+    ];
+  }
+
+  function enterInterior(): void {
+    mode = 'interior';
+    floor = TOP_FLOOR;
+    selected = 0;
+    // Stepping inside drops the trigger so the gun never sticks on while we walk down.
+    fireHeld = false;
+    left = false;
+    right = false;
+  }
+  function backToShooting(): void {
+    mode = 'shooting';
+    floor = TOP_FLOOR;
+  }
+
+  // Routed through the event bus exactly like the old intercom panel; the engine consumes the intent.
+  let emitIntent: (e: { kind: 'buyService'; residentId: string; serviceId: string } | { kind: 'begFavor'; residentId: string; favorId: string }) => void = () => {};
+
+  function confirmSelection(): void {
+    const choice = cachedOptions[selected];
+    if (!choice || choice.option.disabledReason !== undefined) return; // greyed entries are non-selectable
+    if (choice.kind === 'service') {
+      emitIntent({ kind: 'buyService', residentId: choice.residentId, serviceId: choice.option.id });
+    } else {
+      emitIntent({ kind: 'begFavor', residentId: choice.residentId, favorId: choice.option.id });
+    }
+  }
+
+  function handleInteriorKey(code: string): void {
+    if (NAV_DOWN.has(code)) {
+      floor = Math.max(BOTTOM_FLOOR, floor - 1);
+      selected = 0;
+    } else if (NAV_UP.has(code)) {
+      const next = floor + 1;
+      if (next > TOP_FLOOR) backToShooting();
+      else {
+        floor = next;
+        selected = 0;
+      }
+    } else if (NAV_LEFT.has(code)) {
+      selected = Math.max(0, selected - 1);
+    } else if (NAV_RIGHT.has(code)) {
+      selected = Math.min(Math.max(0, cachedOptions.length - 1), selected + 1);
+    } else if (CONFIRM.has(code)) {
+      confirmSelection();
+    }
+  }
+
+  function viewState(): PlayingViewState {
+    cachedOptions = mode === 'interior' ? buildOptions() : [];
+    if (selected >= cachedOptions.length) selected = Math.max(0, cachedOptions.length - 1);
+    const occ = occupantByFloor.get(floor);
+    const w = gs?.combat.waves;
+    const sirenActive = w?.phase === 'siren';
+    const secondsUntilWave = !w || w.phase === 'active' ? null : Math.max(0, w.timer);
+    return {
+      mode,
+      floor,
+      topFloor: TOP_FLOOR,
+      bottomFloor: BOTTOM_FLOOR,
+      storeys: TOP_FLOOR,
+      occupants: [...occupantByFloor].map(([f, r]) => ({ floor: f, id: r.id, name: r.name })),
+      currentResidentId: occ?.id ?? null,
+      currentResidentName: occ?.name ?? null,
+      options: cachedOptions,
+      selected,
+      siren: { active: sirenActive, secondsUntilWave },
+    };
+  }
+
   return {
     enter(_params: void, ctx: SystemContext): void {
       gs = createGameState(ctx.content, ctx.rng.getState().seed);
       engine = createEngine(gs, ctx);
-      dayRamp = ctx.content.combat.difficulty;
-      if (opts.hud) hud = createHud(ctx, opts.hud.settings, opts.hud.economy);
+      occupantByFloor.clear();
+      for (const r of ctx.content.economy.roster) occupantByFloor.set(r.floor, r);
+      emitIntent = (e): void => ctx.events.emit('residentIntent', e);
+      mode = 'shooting';
+      floor = TOP_FLOOR;
+      selected = 0;
       opts.audio?.setScene('Playing');
+      opts.overlay?.setVisible(true);
+      opts.view?.setVisible(true);
     },
 
     update(dt: number): void {
       if (!gs || !engine) return;
-      // The HUD may request a pause while the resident panel is open (accessibility setting); the sim
-      // freezes but HUD animations + audio keep advancing so the panel stays responsive.
-      if (!hud?.wantsPause()) {
-        engine.step(dt, { aimTarget, rotateDir: (right ? 1 : 0) - (left ? 1 : 0), fireHeld });
+      // Accessibility: optionally freeze the sim while inside (otherwise a wave can hit while visiting).
+      const paused = mode === 'interior' && (opts.settings?.pauseWhilePanelOpen ?? false);
+      if (!paused) {
+        const intent: PlayerIntent =
+          mode === 'interior'
+            ? IDLE_INTENT
+            : { aimTarget, rotateDir: (right ? 1 : 0) - (left ? 1 : 0), fireHeld };
+        engine.step(dt, intent);
       }
-      hud?.update(dt, gs);
       opts.audio?.update(gs, dt);
       opts.onState?.(gs);
     },
 
     onInput(e: InputEvent): void {
-      // The HUD gets first crack: if it consumes the event (panel nav/intercom), the gun never sees it.
-      if (gs && hud?.onInput(e, gs)) return;
+      if (e.type === 'key') {
+        if (e.code === panelKey()) {
+          if (e.down) {
+            if (mode === 'shooting') enterInterior();
+            else backToShooting();
+          }
+          return;
+        }
+        if (mode === 'interior') {
+          if (e.down) handleInteriorKey(e.code);
+          return; // interior consumes all keys (never steers the gun)
+        }
+        if (e.code === 'Space') fireHeld = e.down;
+        else if (NAV_LEFT.has(e.code)) left = e.down;
+        else if (NAV_RIGHT.has(e.code)) right = e.down;
+        return;
+      }
+      if (mode === 'interior') return; // ignore aim/fire while inside
       switch (e.type) {
         case 'aim':
           aimTarget = e.world;
@@ -115,52 +218,22 @@ export function createPlayingScene(opts: PlayingSceneOptions = {}): Scene {
         case 'fireUp':
           fireHeld = false;
           break;
-        case 'key':
-          if (e.code === 'Space') fireHeld = e.down;
-          else if (e.code === 'ArrowLeft' || e.code === 'KeyA') left = e.down;
-          else if (e.code === 'ArrowRight' || e.code === 'KeyD') right = e.down;
-          break;
       }
     },
 
     render(r: Renderer): void {
       if (!gs) return;
-      const c = gs.combat;
-      // Parallax Moscow skyline + day/night (real sun/moon sprites) behind the action.
-      const daylight = dayRamp ? daylightAt(gs.time.shiftSeconds, dayRamp) : 1;
-      drawSkyline(r, { phase: gs.time.phase, daylight });
-
-      // Incoming drones as their per-type sprites.
-      for (const d of c.drones) {
-        const tagged = d.colorTag !== undefined;
-        r.drawSprite(droneSprite(d.kind, tagged), d.pos, tagged ? { tint: 'accentPink' } : undefined);
-      }
-      // Projectiles stay code-drawn tracer dots.
-      for (const p of c.projectiles) {
-        r.fillRect(Math.round(p.pos.x), Math.round(p.pos.y), 1, 1, 'flash');
-      }
-
-      // Soldier at the post (state from meters), machine gun rotated to the effective aim.
-      r.drawSprite(soldierState(gs), { x: c.gun.pivot.x, y: r.height });
-      r.drawSprite('gun.base', c.gun.pivot, { rotation: c.aim.effectiveAngle });
-      if (c.gun.firing && !c.gun.overheated) {
-        const mx = c.gun.pivot.x + Math.cos(c.aim.effectiveAngle) * 18;
-        const my = c.gun.pivot.y + Math.sin(c.aim.effectiveAngle) * 18;
-        const frame = Math.floor(gs.time.shiftSeconds * 30) % 3;
-        r.drawSprite('gun.flash', { x: mx, y: my }, { frame, rotation: c.aim.effectiveAngle });
-      }
-
-      // Incident overlays (blackout/drip) darken the world; the HUD draws on top, still readable.
-      drawIncidentOverlays(r, gs);
-      hud?.render(r, gs);
+      const vs = viewState();
+      opts.view?.render(gs, r.alpha, vs);
+      opts.overlay?.update(gs, vs);
     },
 
     exit(): void {
-      hud?.dispose();
-      hud = null;
       engine?.dispose();
       engine = null;
       opts.audio?.setScene('MainMenu');
+      opts.overlay?.setVisible(false);
+      opts.view?.setVisible(false);
       gs = null;
     },
   };

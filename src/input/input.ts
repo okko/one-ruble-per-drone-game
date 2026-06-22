@@ -25,6 +25,9 @@ export interface CreateInputOptions {
   onEvent: (e: InputEvent) => void;
   /** Called once, synchronously, on the first user gesture (for iOS audio unlock). */
   onFirstGesture?: () => void;
+  /** Attach the window keyboard listeners (default true). Set false for a second pointer-only input
+   *  (e.g. the 3D canvas) so keystrokes are not delivered twice. */
+  keyboard?: boolean;
 }
 
 /**
@@ -88,12 +91,15 @@ export function createInput(
     opts.onEvent({ type: 'key', code: e.code, down: false });
   }
 
+  const wantsKeyboard = opts.keyboard ?? true;
   canvas.addEventListener('pointerdown', onPointerDown as EventListener);
   canvas.addEventListener('pointermove', onPointerMove as EventListener);
   canvas.addEventListener('pointerup', endPrimary as EventListener);
   canvas.addEventListener('pointercancel', endPrimary as EventListener); // cancel ⇒ fire-up
-  window.addEventListener('keydown', onKeyDown);
-  window.addEventListener('keyup', onKeyUp);
+  if (wantsKeyboard) {
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+  }
 
   return {
     isDown: (code) => held.has(code),
@@ -102,8 +108,10 @@ export function createInput(
       canvas.removeEventListener('pointermove', onPointerMove as EventListener);
       canvas.removeEventListener('pointerup', endPrimary as EventListener);
       canvas.removeEventListener('pointercancel', endPrimary as EventListener);
-      window.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('keyup', onKeyUp);
+      if (wantsKeyboard) {
+        window.removeEventListener('keydown', onKeyDown);
+        window.removeEventListener('keyup', onKeyUp);
+      }
     },
   };
 }

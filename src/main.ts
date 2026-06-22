@@ -20,6 +20,8 @@ import type { SettingsView } from './ui/hud/types';
 import { createScaler } from './render/scaler';
 import { createCanvasRenderer } from './render/canvas-renderer';
 import { createArtAtlas } from './render/atlas/build-atlas';
+import { createThreeView } from './render/three/view';
+import { createGameOverlay } from './ui/game-overlay';
 import { createInput } from './input/input';
 import { createSceneManager } from './state/scene-manager';
 import { createBootScene } from './state/boot-scene';
@@ -52,6 +54,10 @@ function main(): void {
   const ctx2d = canvas.getContext('2d');
   if (!ctx2d) throw new Error('main: 2D canvas context unavailable');
   const rotateOverlay = document.getElementById('rotate-overlay') ?? undefined;
+  // The Three.js in-game scene renders to its own WebGL canvas at native resolution; the DOM HUD
+  // overlays it. Both are optional (absent canvas ⇒ headless-safe no-op).
+  const canvas3d = document.getElementById('game3d') as HTMLCanvasElement | null;
+  const hudHost = document.getElementById('hud');
 
   // Core substrate + injected context.
   const rng = createRng(0x1234abcd);
@@ -84,6 +90,11 @@ function main(): void {
   // placeholders for any id without a grid yet (content.manifest stays validated by loadContent above).
   const atlas = createArtAtlas();
   const renderer = createCanvasRenderer(ctx2d, atlas.provider, atlas.canvas);
+
+  // The Three.js world view + DOM HUD overlay for the in-game scene (§request). Created up front so the
+  // Playing scene can drive them; they self-disable when WebGL/DOM is unavailable (headless).
+  const view = canvas3d ? createThreeView(canvas3d, content) : undefined;
+  const overlay = hudHost ? createGameOverlay(hudHost, content) : undefined;
 
   // Audio (area 06): the real Web Audio backend behind the injectable seam; SFX + music wired to the
   // event bus. Stays suspended until the first user gesture unlocks it (iOS-safe, below).
@@ -123,7 +134,7 @@ function main(): void {
     createMainMenuScene({ sceneManager: manager, audio, settings: settingsRepo, highscores }),
   );
   manager.register('Playing', () =>
-    createPlayingScene({ onState, hud: { settings: settingsView, economy: hudEconomy }, audio }),
+    createPlayingScene({ onState, audio, view, overlay, economy: hudEconomy, settings: settingsView }),
   );
   manager.register('Settings', () => createSettingsScene(manager));
   manager.register('GameOver', () =>
@@ -142,7 +153,8 @@ function main(): void {
   );
   wireGameOver(events, manager, meta);
 
-  // Input (the audio-unlock hook is consumed by the Audio area in a later phase).
+  // Input. The 2D canvas (menus) owns the keyboard; the 3D canvas (Playing) takes pointer-only aim via
+  // the Three view's screenToWorld so keystrokes are never delivered twice.
   createInput(canvas, scaler, {
     onEvent: (e) => manager.routeInput(e),
     // iOS unlocks the AudioContext only from a synchronous in-gesture resume (compatibility.md §5).
@@ -150,12 +162,20 @@ function main(): void {
       void audio.unlock();
     },
   });
+  if (canvas3d && view) {
+    createInput(
+      canvas3d,
+      { screenToWorld: (sx, sy) => view.screenToWorld(sx, sy) },
+      { onEvent: (e) => manager.routeInput(e), onFirstGesture: () => void audio.unlock(), keyboard: false },
+    );
+  }
 
   // Viewport: drive resize from visualViewport (handles the iOS URL-bar reflow).
   const resize = (): void => {
     const vw = window.visualViewport?.width ?? window.innerWidth;
     const vh = window.visualViewport?.height ?? window.innerHeight;
     scaler.resize(vw, vh);
+    view?.resize(vw, vh);
   };
   resize();
   window.addEventListener('resize', resize);
@@ -185,6 +205,9 @@ function main(): void {
       renderer.setAlpha(step.alpha);
     }
     manager.render(renderer);
+    // The 3D world (+ HUD) shows only while Playing — driven by the scene's enter/exit. Hide the
+    // pixel-art 2D canvas underneath it so menus never bleed through the letterbox.
+    canvas.style.visibility = manager.active === 'Playing' ? 'hidden' : 'visible';
     requestAnimationFrame(frame);
   };
   requestAnimationFrame(frame);
