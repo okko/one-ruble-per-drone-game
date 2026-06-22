@@ -15,6 +15,8 @@ export interface ResolvedSprite {
   rect: Rect;
   pivot: [number, number];
   glyph?: string;
+  /** Present for bitmap-font sprites so the renderer can index glyph cells within `rect`. */
+  font?: FontDescriptor;
 }
 
 export interface SpriteProvider {
@@ -125,7 +127,12 @@ export function createManifestProvider(
           rect = { x: def.x + f * def.w, y: def.y, w: def.w, h: def.h };
         }
       }
-      return { source: 'atlas', rect, pivot: computePivot(id, def.w, def.h, def.pivot) };
+      return {
+        source: 'atlas',
+        rect,
+        pivot: computePivot(id, def.w, def.h, def.pivot),
+        ...(def.font ? { font: def.font } : {}),
+      };
     },
   };
 }

@@ -26,6 +26,9 @@ export default defineConfig({
         'src/state/create-game-state.ts',
         'src/render/scaler.ts',
         'src/render/sprite-provider.ts',
+        // Phase 6 art: pure pixel-art data + raster/layout math (DOM build-atlas.ts stays ungated).
+        'src/render/art/**',
+        'src/render/atlas/rasterize.ts',
       ],
       // game-state.ts is pure interfaces (no runtime); test-support helpers are not product logic.
       exclude: ['**/*.test.ts', '**/__fixtures__/**', 'src/test-support/**'],

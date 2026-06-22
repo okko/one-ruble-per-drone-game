@@ -20,27 +20,41 @@ import type { Scene } from './scene';
 import type { SystemContext } from '../core/system-context';
 import type { InputEvent } from '../input/input';
 import type { Renderer } from '../render/renderer';
-import type { PaletteKey } from '../render/palette';
+import type { SpriteId } from '../content/sprite-ids';
+import type { DifficultyRamp } from '../core/difficulty';
+import { daylightAt } from '../core/difficulty';
+import { drawSkyline } from '../render/backdrop';
+import { drawIncidentOverlays } from '../render/overlays';
 import type { GameState } from './game-state';
 import type { Vec2 } from '../core/math';
 
-function droneColor(kind: string): PaletteKey {
+/** Engine drone `kind` → atlas sprite id (jackpot-tagged drones use the tintable `drone.special`). */
+function droneSprite(kind: string, tagged: boolean): SpriteId {
+  if (tagged) return 'drone.special';
   switch (kind) {
     case 'scout':
-      return 'droneScout';
+      return 'drone.scout';
     case 'heavy':
-      return 'droneBody';
+      return 'drone.armored';
     case 'kamikaze':
-      return 'droneBomber';
+      return 'drone.bomber';
     case 'frenzy':
-      return 'droneSwarm';
+      return 'drone.swarm';
     case 'boss':
-      return 'droneBoss';
+      return 'drone.boss';
     case 'decoy_bird':
-      return 'cream';
+      return 'decoy.bird';
     default:
-      return 'droneBody';
+      return 'drone.scout';
   }
+}
+
+/** Soldier sprite for the current state (crisis > firing > drowsy > idle). */
+function soldierState(gs: GameState): SpriteId {
+  if (Object.values(gs.meters.inCrisis).some(Boolean)) return 'soldier.crisis';
+  if (gs.combat.gun.firing) return 'soldier.fire';
+  if (gs.meters.values.sleep > 60) return 'soldier.tired';
+  return 'soldier.idle';
 }
 
 /** Optional hooks for the host (main.ts). `onState` is a per-tick diagnostic sink used by the e2e. */
@@ -56,6 +70,7 @@ export function createPlayingScene(opts: PlayingSceneOptions = {}): Scene {
   let gs: GameState | null = null;
   let engine: Engine | null = null;
   let hud: HudImpl | null = null;
+  let dayRamp: DifficultyRamp | null = null;
 
   // Buffered input intent (translated from the typed InputEvent stream).
   let aimTarget: Vec2 | null = null;
@@ -67,6 +82,7 @@ export function createPlayingScene(opts: PlayingSceneOptions = {}): Scene {
     enter(_params: void, ctx: SystemContext): void {
       gs = createGameState(ctx.content, ctx.rng.getState().seed);
       engine = createEngine(gs, ctx);
+      dayRamp = ctx.content.combat.difficulty;
       if (opts.hud) hud = createHud(ctx, opts.hud.settings, opts.hud.economy);
       opts.audio?.setScene('Playing');
     },
@@ -110,23 +126,32 @@ export function createPlayingScene(opts: PlayingSceneOptions = {}): Scene {
     render(r: Renderer): void {
       if (!gs) return;
       const c = gs.combat;
-      r.clear(gs.time.phase === 'night' ? 'skyNightTop' : 'skyDayTop');
+      // Parallax Moscow skyline + day/night (real sun/moon sprites) behind the action.
+      const daylight = dayRamp ? daylightAt(gs.time.shiftSeconds, dayRamp) : 1;
+      drawSkyline(r, { phase: gs.time.phase, daylight });
 
+      // Incoming drones as their per-type sprites.
       for (const d of c.drones) {
-        const s = Math.max(2, Math.round(d.radius * 2));
-        r.fillRect(Math.round(d.pos.x - d.radius), Math.round(d.pos.y - d.radius), s, s, droneColor(d.kind));
+        const tagged = d.colorTag !== undefined;
+        r.drawSprite(droneSprite(d.kind, tagged), d.pos, tagged ? { tint: 'accentPink' } : undefined);
       }
+      // Projectiles stay code-drawn tracer dots.
       for (const p of c.projectiles) {
         r.fillRect(Math.round(p.pos.x), Math.round(p.pos.y), 1, 1, 'flash');
       }
 
-      // Gun base + a muzzle pip along the effective aim.
-      r.fillRect(Math.round(c.gun.pivot.x - 3), Math.round(c.gun.pivot.y - 3), 6, 6, 'gunmetal');
-      const mx = c.gun.pivot.x + Math.cos(c.aim.effectiveAngle) * 12;
-      const my = c.gun.pivot.y + Math.sin(c.aim.effectiveAngle) * 12;
-      r.fillRect(Math.round(mx) - 1, Math.round(my) - 1, 2, 2, c.gun.overheated ? 'meterCrit' : 'flash');
+      // Soldier at the post (state from meters), machine gun rotated to the effective aim.
+      r.drawSprite(soldierState(gs), { x: c.gun.pivot.x, y: r.height });
+      r.drawSprite('gun.base', c.gun.pivot, { rotation: c.aim.effectiveAngle });
+      if (c.gun.firing && !c.gun.overheated) {
+        const mx = c.gun.pivot.x + Math.cos(c.aim.effectiveAngle) * 18;
+        const my = c.gun.pivot.y + Math.sin(c.aim.effectiveAngle) * 18;
+        const frame = Math.floor(gs.time.shiftSeconds * 30) % 3;
+        r.drawSprite('gun.flash', { x: mx, y: my }, { frame, rotation: c.aim.effectiveAngle });
+      }
 
-      // The real HUD overlay (area 10) replaces the Phase-3 placeholder readouts.
+      // Incident overlays (blackout/drip) darken the world; the HUD draws on top, still readable.
+      drawIncidentOverlays(r, gs);
       hud?.render(r, gs);
     },
 

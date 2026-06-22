@@ -19,7 +19,7 @@ import { createHudEconomy } from './ui/hud/economy-adapter';
 import type { SettingsView } from './ui/hud/types';
 import { createScaler } from './render/scaler';
 import { createCanvasRenderer } from './render/canvas-renderer';
-import { createPlaceholderProvider, createManifestProvider } from './render/sprite-provider';
+import { createArtAtlas } from './render/atlas/build-atlas';
 import { createInput } from './input/input';
 import { createSceneManager } from './state/scene-manager';
 import { createBootScene } from './state/boot-scene';
@@ -80,8 +80,10 @@ function main(): void {
 
   // Render.
   const scaler = createScaler(canvas, rotateOverlay);
-  const sprites = createManifestProvider(content.manifest, createPlaceholderProvider());
-  const renderer = createCanvasRenderer(ctx2d, sprites);
+  // Real art: pixel-art grids rasterised into an in-memory atlas at boot; the provider falls back to
+  // placeholders for any id without a grid yet (content.manifest stays validated by loadContent above).
+  const atlas = createArtAtlas();
+  const renderer = createCanvasRenderer(ctx2d, atlas.provider, atlas.canvas);
 
   // Audio (area 06): the real Web Audio backend behind the injectable seam; SFX + music wired to the
   // event bus. Stays suspended until the first user gesture unlocks it (iOS-safe, below).
