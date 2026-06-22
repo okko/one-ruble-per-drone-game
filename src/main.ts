@@ -20,7 +20,7 @@ import type { SettingsView } from './ui/hud/types';
 import { createScaler } from './render/scaler';
 import { createCanvasRenderer } from './render/canvas-renderer';
 import { createArtAtlas } from './render/atlas/build-atlas';
-import { createThreeView } from './render/three/view';
+import { createThreeView, type ThreeView } from './render/three/view';
 import { createGameOverlay } from './ui/game-overlay';
 import { createInput } from './input/input';
 import { createSceneManager } from './state/scene-manager';
@@ -91,10 +91,20 @@ function main(): void {
   const atlas = createArtAtlas();
   const renderer = createCanvasRenderer(ctx2d, atlas.provider, atlas.canvas);
 
-  // The Three.js world view + DOM HUD overlay for the in-game scene (§request). Created up front so the
-  // Playing scene can drive them; they self-disable when WebGL/DOM is unavailable (headless).
-  const view = canvas3d ? createThreeView(canvas3d, content) : undefined;
+  // The DOM HUD overlay (no WebGL) is built up front; the Three.js world view is created LAZILY on the
+  // first run so boot/menu never touch WebGL (keeps the strict no-console-error smokes clean on headless
+  // engines without a GL context). Both self-disable when their backing surface is unavailable.
   const overlay = hudHost ? createGameOverlay(hudHost, content) : undefined;
+  let view: ThreeView | undefined;
+  const ensureView = (): ThreeView | undefined => {
+    if (!view && canvas3d) {
+      view = createThreeView(canvas3d, content);
+      const vw = window.visualViewport?.width ?? window.innerWidth;
+      const vh = window.visualViewport?.height ?? window.innerHeight;
+      view.resize(vw, vh);
+    }
+    return view;
+  };
 
   // Audio (area 06): the real Web Audio backend behind the injectable seam; SFX + music wired to the
   // event bus. Stays suspended until the first user gesture unlocks it (iOS-safe, below).
@@ -134,7 +144,7 @@ function main(): void {
     createMainMenuScene({ sceneManager: manager, audio, settings: settingsRepo, highscores }),
   );
   manager.register('Playing', () =>
-    createPlayingScene({ onState, audio, view, overlay, economy: hudEconomy, settings: settingsView }),
+    createPlayingScene({ onState, audio, view: ensureView(), overlay, economy: hudEconomy, settings: settingsView }),
   );
   manager.register('Settings', () => createSettingsScene(manager));
   manager.register('GameOver', () =>
@@ -162,10 +172,10 @@ function main(): void {
       void audio.unlock();
     },
   });
-  if (canvas3d && view) {
+  if (canvas3d) {
     createInput(
       canvas3d,
-      { screenToWorld: (sx, sy) => view.screenToWorld(sx, sy) },
+      { screenToWorld: (sx, sy) => (view ? view.screenToWorld(sx, sy) : { x: 192, y: 108 }) },
       { onEvent: (e) => manager.routeInput(e), onFirstGesture: () => void audio.unlock(), keyboard: false },
     );
   }
@@ -205,9 +215,11 @@ function main(): void {
       renderer.setAlpha(step.alpha);
     }
     manager.render(renderer);
-    // The 3D world (+ HUD) shows only while Playing — driven by the scene's enter/exit. Hide the
-    // pixel-art 2D canvas underneath it so menus never bleed through the letterbox.
-    canvas.style.visibility = manager.active === 'Playing' ? 'hidden' : 'visible';
+    // The 3D world + DOM HUD show only while Playing. The scene toggles the 3D canvas + overlay root;
+    // here we toggle the HUD host (#hud) and hide the pixel-art 2D canvas so menus never bleed through.
+    const playing = manager.active === 'Playing';
+    canvas.style.visibility = playing ? 'hidden' : 'visible';
+    if (hudHost) hudHost.style.display = playing ? 'block' : 'none';
     requestAnimationFrame(frame);
   };
   requestAnimationFrame(frame);

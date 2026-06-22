@@ -119,24 +119,29 @@ test('audio context reaches "running" after the first gesture (area 06, §8.13)'
     .toBe('running');
 });
 
-test('HUD meter-icon row matches the committed snapshot per engine (area 10, §8.16)', async ({ page }) => {
+test('the DOM HUD overlay shows during a run (area 10, §8.16 — in-game UI is now Three.js + DOM)', async ({ page }) => {
+  // The in-game UI was fully replaced (§request): the world renders in Three.js on #game3d and the HUD
+  // is a DOM overlay on #hud, so the old pixel-art meter-icon snapshot no longer applies. This smoke
+  // proves the new HUD mounts + shows the live readouts once a run starts (engine-agnostic, no WebGL).
+  const errors: string[] = [];
+  page.on('console', (m) => {
+    if (m.type() === 'error') errors.push(m.text());
+  });
+  page.on('pageerror', (e) => errors.push(e.message));
+
   await page.goto('/');
   const canvas = page.locator('#game');
   await expect(canvas).toBeVisible();
 
-  // Start a run so the HUD overlay renders, then snapshot IMMEDIATELY — before the first drone spawns —
-  // so only the static, procedural meter icons (😴🍞💧🚬💩) sit in the clipped column (no live bars/drones).
-  // "Start New Shift" is pre-selected on the Main Menu; Enter begins the run (the tap just unlocks audio).
+  // "Start New Shift" is pre-selected on the Main Menu; the tap unlocks audio, Enter begins the run.
   await canvas.click({ position: { x: 40, y: 40 } });
   await page.keyboard.press('Enter');
-  await page.waitForTimeout(120);
 
-  const box = await canvas.boundingBox();
-  if (!box) throw new Error('canvas has no bounding box');
-  const scale = Math.round(box.width / 384); // integer-scaled (compatibility.md §2)
-  // Internal x:[0,13) is the icon column (bars start at x=14); y:[0,46) covers the five stacked icons.
-  const clip = { x: box.x, y: box.y, width: 13 * scale, height: 46 * scale };
-  await expect(page).toHaveScreenshot('hud-icon-row.png', { clip, maxDiffPixelRatio: 0.02 });
+  const hud = page.locator('#hud');
+  await expect(hud).toBeVisible({ timeout: 5000 });
+  await expect(hud).toContainText('CITY INTEGRITY');
+  await expect(page.locator('#game3d')).toBeVisible(); // the Three.js world canvas is shown while Playing
+  expect(errors).toEqual([]);
 });
 
 test.fixme('localStorage round-trips; in-memory fallback engages when storage throws', () => {
