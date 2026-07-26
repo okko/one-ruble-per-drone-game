@@ -65,7 +65,7 @@ consume repositories, but they do not change these contracts without sign-off.
 5. **Lifecycle ordering** on a transition `A → B`: call `A.exit()`, then construct/
    reset `B`, then `B.enter(params)`. Overlays call `enter`/`exit` without exiting
    the scene beneath.
-6. The manager owns the per-frame fan-out: `update(dt, ctx)` and `render(r)` are
+6. The manager owns the per-frame fan-out: `update(dt, ctx)` and `render(alpha)` are
    dispatched to the active scene (and overlay where appropriate). Input events are
    routed to the topmost scene (overlay first, else active).
 7. Transition **parameters** are typed and passed into `enter` (e.g. `GameOver`
@@ -113,7 +113,7 @@ consume repositories, but they do not change these contracts without sign-off.
 export interface Scene<P = void> {
   enter(params: P, ctx: SystemContext): void;
   update(dt: number, ctx: SystemContext): void;   // not called while paused/overlaid
-  render(r: Renderer): void;
+  render(alpha: number): void;                    // interpolation factor; a scene does not draw
   onInput(e: InputEvent): void;
   exit(): void;
 }
@@ -135,7 +135,7 @@ export interface SceneManager {
   readonly active: SceneId;
   readonly overlay: SceneId | null;
   update(dt: number, ctx: SystemContext): void;  // dispatches to active (or paused) + overlay
-  render(r: Renderer): void;
+  render(alpha: number): void;
   routeInput(e: InputEvent): void;
 }
 
@@ -264,7 +264,7 @@ No live-`GameState` autosave (see §3.3 item 12).
 
 ## 7. Dependencies & integration
 
-- **Consumes** from Core: `SystemContext` (for `events`), `Renderer`, `InputEvent`
+- **Consumes** from Core: `SystemContext` (for `events`), `InputEvent`
   types, the fixed-timestep driver (which calls `manager.update/render`).
 - **Listens to** the `gameOver` event to drive the MetaStats record + GameOver
   transition; the actual emit comes from Gameplay Engine.

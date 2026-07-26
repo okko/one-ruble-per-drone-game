@@ -50,9 +50,9 @@ All meters are `number` in `[0, 100]`, clamped. Convention: **0 = comfortable/sa
 | `thirst`| 💧 | always; faster during day & under heavy fire | water |
 | `vice`  | 🚬 | always | cigarette (small) **or** vodka (large) |
 
-> **Requirement:** the `poo` indicator must clearly read as the poo emoji `💩` (a
-> pixel-art icon that looks like 💩 is fine — it need not be the literal system glyph;
-> see `compatibility.md §2`). Rendering is owned by HUD/Art.
+> **Requirement:** the `poo` indicator must clearly read as the poo emoji `💩`. The UI
+> is DOM, so it is the system emoji glyph (see `compatibility.md §2`). Rendering is
+> owned by HUD & UI (10).
 
 ### 3.2 Drain model
 Each meter rises by `baseRate * modifier * dt` per tick (`dt` in seconds). Rates are

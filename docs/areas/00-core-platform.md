@@ -6,10 +6,10 @@
 
 The Core Platform is the foundation every other area plugs into. It owns the build
 toolchain, the deterministic game loop, the seedable RNG, the injected clock, the
-typed event bus, the entity registry, core math, the canvas scaler, the input
-abstraction, the `SceneManager` and `GameState` skeletons, and the content loader.
-It contains **no gameplay rules** — it provides the substrate that makes gameplay
-deterministic, decoupled, and testable per `architecture.md` §3.
+typed event bus, the entity registry, core math, viewport and orientation handling,
+the input abstraction, the `SceneManager` and `GameState` skeletons, and the content
+loader. It contains **no gameplay rules** — it provides the substrate that makes
+gameplay deterministic, decoupled, and testable per `architecture.md` §3.
 
 ## 2. Scope
 
@@ -22,10 +22,12 @@ deterministic, decoupled, and testable per `architecture.md` §3.
 - `core/events`: the typed `EventBus`.
 - `core/registry`: ECS-lite entity/component store used by combat entities.
 - `core/math`: `Vec2` and helpers.
-- `render/scaler`: internal-resolution canvas, integer scaling, screen↔world mapping.
+- **Viewport & orientation**: driving resize from `visualViewport`, the safe-area and
+  `dvh` page CSS, and the portrait "rotate to landscape" state. It **does not** own
+  the 3D renderer or the UI layout — it tells them the viewport changed.
 - `input`: **Pointer Events** abstraction (mouse/touch/pen unified) + keyboard →
   typed input events; the **touch-to-aim / hold-to-fire** scheme (`compatibility.md
-  §4`); `pointercancel` handling; canvas gesture-hygiene CSS; audio-unlock hook.
+  §4`); `pointercancel` handling; gesture-hygiene CSS; audio-unlock hook.
 - `state/scene-manager` + `state/game-state` **skeletons** (lead-owned shared types).
 - `content/loader`: load + validate `src/content` data tables at boot.
 - **Quality-gate infrastructure** (per `testing.md`): `.github/workflows/ci.yml`, the
@@ -41,7 +43,9 @@ deterministic, decoupled, and testable per `architecture.md` §3.
 - Concrete scene implementations beyond `Boot`/empty placeholders (UI + Gameplay).
 - Concrete content table *contents* (each domain owns its tables); this area owns
   only the loader + validation framework.
-- Rendering of sprites/HUD/menus (Render, HUD, UI areas) — scaler only.
+- All rendering — the three.js scene and camera (Art), the DOM interface (HUD & UI).
+  This area owns neither, and owns no screen↔world projection: that belongs to the
+  view that owns the camera.
 - Audio engine internals (Audio area) — only the unlock hook lives here.
 
 ## 3. Requirements & mechanics
@@ -88,13 +92,14 @@ loop(now):
   while accumulator >= FIXED_DT:
     scene.update(FIXED_DT, ctx)     // deterministic, dt is constant
     accumulator -= FIXED_DT
-  renderer.alpha = accumulator / FIXED_DT   // 0..1 interpolation factor, carried on the renderer
-  manager.render(renderer)                  // scenes read `renderer.alpha`; see §3.10 + Renderer
+  alpha = accumulator / FIXED_DT   // 0..1 interpolation factor
+  manager.render(alpha)            // see §3.10
   requestAnimationFrame(loop)
 ```
 - Logic only ever sees `FIXED_DT`. Frame-rate independence and determinism follow.
-- `renderer.alpha` lets the renderer interpolate entity positions between logic ticks. It is a
-  **field on `Renderer`**, not a `render()` parameter — so `Scene.render(r)` and the loop agree.
+- `alpha` lets the presentation interpolate entity positions between logic ticks. It
+  is passed **as an argument** to `render`, so the loop and every scene agree without
+  a shared mutable renderer object.
 - Pause stops calling `update` but may keep rendering.
 
 ### 3.3 RNG (core/rng)
@@ -126,25 +131,25 @@ loop(now):
 - Immutable-friendly `Vec2` ops (add, sub, scale, len, normalize, dot, angle,
   rotate, lerp, dist), `clamp`, `lerp`, `approach(value, target, maxDelta)`.
 
-### 3.8 Scaler (render/scaler)
-- Internal resolution **384×216**; backing canvas is that size, CSS-scaled by the
-  largest integer that fits the viewport (letterboxed), `image-rendering: pixelated`
-  (+ Safari fallbacks `-webkit-optimize-contrast`/`crisp-edges`),
-  `ctx.imageSmoothingEnabled = false`. **The backing buffer stays 384×216 — never
-  allocate a device-pixel-sized canvas** (mobile memory/fill-rate trap;
-  `compatibility.md §2`).
-- `screenToWorld` / `worldToScreen` for aiming the gun with the pointer. Map from
-  `getBoundingClientRect()` + `clientX/clientY` (**not** `offsetX/offsetY`, which
-  differ across browsers), minus the letterbox offset, divided by the integer CSS
-  scale.
-- **Viewport source & reflow:** `resize()` is driven by `window.visualViewport`
+### 3.8 Viewport & orientation
+- The game renders at the **device's native resolution**. There is no fixed internal
+  resolution, no integer scaling, and no letterboxing. The simulation still runs in a
+  fixed **384×216 arena coordinate space**, but that is a *logical* space owned by the
+  simulation — it is not a framebuffer size and nothing scales pixels to it.
+- **Screen↔world mapping is not owned here.** Turning a pointer position into an aim
+  point requires the camera, so it belongs to the view that owns the camera
+  (`ThreeView.screenToWorld`, area 11). Core delivers pointer positions in CSS pixels
+  relative to the canvas and stays out of the projection business.
+- Pointer coordinates are computed from `getBoundingClientRect()` +
+  `clientX/clientY` — **not** `offsetX/offsetY`, which differ across browsers.
+- **Viewport source & reflow:** resize is driven by `window.visualViewport`
   (fallback `window.inner*`), re-run on `visualViewport` `resize` + `orientationchange`
-  + `resize` (debounced) so the iOS Safari URL-bar show/hide doesn't clip the canvas.
+  + `resize` (debounced) so the iOS Safari URL-bar show/hide doesn't clip the view.
   Page CSS uses `100dvh` (fallback `100vh`), `viewport-fit=cover`, and
   `env(safe-area-inset-*)` padding (`compatibility.md §3`).
-- **Orientation:** the game is 16:9 landscape; on a portrait phone the scaler/HUD
-  surface a "rotate to landscape" state (orientation lock is unavailable on iOS
-  Safari — prompt, don't force). Fullscreen is not assumed (unavailable on iPhone).
+- **Orientation:** the game is landscape; on a portrait phone a "rotate to landscape"
+  overlay is shown (orientation lock is unavailable on iOS Safari — prompt, don't
+  force). Fullscreen is not assumed (unavailable on iPhone).
 
 ### 3.9 Input
 - Abstraction over **Pointer Events** (`pointerdown`/`move`/`up`/`cancel` — one source
@@ -159,17 +164,18 @@ loop(now):
   the gun sticks firing). Only the primary pointer aims/fires; secondary pointers are
   ignored (or routed to the HUD intercom button). Desktop mouse (hover-aim + held
   button) and keyboard (A/D rotate + Space fire) paths are retained.
-- **Gesture hygiene:** the canvas sets `touch-action: none`, `user-select: none`
-  (+ `-webkit-` variants), `-webkit-touch-callout: none`, and `preventDefault`s
-  pointer/touch to suppress scroll, double-tap-zoom, pull-to-refresh, and long-press
-  callout.
+- **Gesture hygiene:** the WebGL canvas and the UI root set `touch-action: none`,
+  `user-select: none` (+ `-webkit-` variants), `-webkit-touch-callout: none`, and
+  `preventDefault` pointer/touch to suppress scroll, double-tap-zoom,
+  pull-to-refresh, and long-press callout.
 
 ### 3.10 Scene manager & GameState skeletons
 - This area **publishes the lead-owned contracts** — `Scene<P>`, `SceneId`, `SceneManager`,
-  `Renderer`, and the `GameState` skeleton (`architecture.md` §4) — plus a trivial `Boot`
-  placeholder scene. **State & Persistence (09) implements the `SceneManager` FSM** (transition
-  graph, overlays, lifecycle, `enter/exit/update/render/routeInput` dispatch); this area does not
-  duplicate that logic.
+  and the `GameState` skeleton (`architecture.md` §4) — plus a trivial `Boot`
+  placeholder scene. A scene's render hook is **`render(alpha: number)`**: scenes do not
+  draw, they update presentation objects that draw themselves. **State & Persistence (09)
+  implements the `SceneManager` FSM** (transition graph, overlays, lifecycle,
+  `enter/exit/update/render/routeInput` dispatch); this area does not duplicate that logic.
 - These contracts are **lead-owned**; other areas refine only their own `GameState` slice.
 
 ### 3.11 Content loader
@@ -225,14 +231,6 @@ export const v2: { add; sub; scale; len; norm; dot; angle; rotate; lerp; dist };
 export function clamp(x: number, lo: number, hi: number): number;
 export function approach(value: number, target: number, maxDelta: number): number;
 
-// render/scaler.ts
-export interface Scaler {
-  readonly width: 384; readonly height: 216; readonly scale: number;
-  resize(viewportW: number, viewportH: number): void;
-  screenToWorld(sx: number, sy: number): Vec2;
-  worldToScreen(w: Vec2): Vec2;
-}
-
 // input/input.ts
 export type InputEvent =
   | { type: 'aim'; world: Vec2 }
@@ -241,17 +239,9 @@ export type InputEvent =
   | { type: 'pointer'; world: Vec2; down: boolean };
 export interface Input { isDown(code: string): boolean; dispose(): void; }
 
-// render/renderer.ts  (LEAD-OWNED — the drawing surface every Scene.render receives; the concrete
-// Canvas implementation is Core/Render's. DrawOpts/TextOpts also live here. `alpha` is a FIELD,
-// not a render() parameter, which is what lets Scene.render(r) and the loop agree.)
-export interface Renderer {
-  readonly width: 384; readonly height: 216;
-  readonly alpha: number;            // fixed-timestep interpolation factor 0..1 (set by the loop)
-  clear(color?: PaletteKey): void;
-  drawSprite(id: SpriteId, pos: Vec2, opts?: DrawOpts): void;
-  fillRect(x: number, y: number, w: number, h: number, color: PaletteKey): void;
-  text(str: string, x: number, y: number, opts?: TextOpts): void;
-}
+// There is no `Renderer` contract. Presentation is owned by two independent layers:
+// the three.js view (area 11) and the DOM UI (area 10). Scenes receive only the
+// fixed-timestep interpolation factor and update those layers.
 
 // state/scene.ts + state/scene-manager.ts
 // CANONICAL contract — reconciled to State & Persistence (09), which IMPLEMENTS the FSM. Scenes
@@ -260,7 +250,7 @@ export interface Renderer {
 export interface Scene<P = void> {
   enter(params: P, ctx: SystemContext): void;   // typed transition params (see 09's SceneParams)
   update(dt: number, ctx: SystemContext): void; // not called while frozen beneath an overlay
-  render(r: Renderer): void;                     // read r.alpha to interpolate
+  render(alpha: number): void;                  // 0..1 interpolation factor; a scene does not draw
   onInput(e: InputEvent): void;
   exit(): void;
 }
@@ -274,7 +264,7 @@ export interface SceneManager {
   popOverlay(): void;
   readonly active: SceneId; readonly overlay: SceneId | null;
   update(dt: number, ctx: SystemContext): void;
-  render(r: Renderer): void;
+  render(alpha: number): void;
   routeInput(e: InputEvent): void;
 }
 export function createSceneManager(ctx: SystemContext, initial?: SceneId): SceneManager;
@@ -300,7 +290,8 @@ by the State & Persistence area), but does not write to `localStorage`.
 ## 7. Dependencies & integration
 
 - **Provides to all areas:** `SystemContext` (`rng`, `events`, `content`), the loop,
-  the registry, math, scaler, input, `SceneManager`, `GameState` skeleton.
+  the registry, math, viewport/orientation handling, input, `SceneManager`,
+  `GameState` skeleton.
 - **Emits:** none of the gameplay events itself; it provides the bus.
 - **Consumes:** the audio-unlock signal is forwarded to the Audio area; scenes are
   supplied by Gameplay/UI areas via `register`.
@@ -322,14 +313,15 @@ check` (typecheck + lint + `vitest run`) must be green (architecture §7).
    the in-flight event.
 4. **Registry:** create/destroy lifecycle; add/get/remove components; `with(...)`
    returns only entities having all keys; destroyed ids are not returned.
-5. **Scaler math:** integer scale selection for several viewport sizes (incl.
-   letterbox); `screenToWorld`∘`worldToScreen` is identity within rounding; mapping
-   respects letterbox offset and is computed from a rect origin + `clientX/Y` (not
-   `offsetX/Y`); portrait viewport yields the "rotate" state.
-6. **Scene contract & `Boot` placeholder:** the `Scene`/`SceneManager`/`Renderer` types compile
-   and the `Boot` placeholder's lifecycle methods are callable. (The FSM transition tests — legal/
-   illegal edges, lifecycle order, overlays — are owned by **State & Persistence (09)**, which
-   implements the manager.)
+5. **Viewport & pointer coordinates:** resize is computed from the `visualViewport`
+   size with the `window.inner*` fallback; pointer positions are derived from a rect
+   origin + `clientX/Y` (not `offsetX/Y`); a portrait viewport yields the "rotate"
+   state and a landscape one clears it.
+6. **Scene contract & `Boot` placeholder:** the `Scene`/`SceneManager` types compile,
+   `render` takes the interpolation factor, and the `Boot` placeholder's lifecycle
+   methods are callable. (The FSM transition tests — legal/illegal edges, lifecycle
+   order, overlays — are owned by **State & Persistence (09)**, which implements the
+   manager.)
 7. **Content loader:** valid tables load; malformed tables (missing field, wrong
    type, out-of-range) fail loudly with a clear error; loader output is the typed
    `Content`.
@@ -347,8 +339,8 @@ check` (typecheck + lint + `vitest run`) must be green (architecture §7).
 ## 9. Acceptance criteria / Definition of done
 
 On top of the global DoD (`architecture.md` §9):
-- `npm run dev` boots to a blank/`Boot` scene at 384×216 integer-scaled, crisp on a
-  high-DPI display, letterboxed correctly, and reflows on viewport/orientation change.
+- `npm run dev` boots to a `Boot` scene that fills the viewport at native resolution,
+  is crisp on a high-DPI display, and reflows correctly on viewport/orientation change.
 - `npm run check` is green with coverage ≥85% (lines/branches/functions) on `core/`
   and the loader; the **Playwright matrix** and the **determinism golden** pass in CI.
 - The quality-gate infra is in place and enforcing (`testing.md`): CI workflow,
@@ -356,14 +348,16 @@ On top of the global DoD (`architecture.md` §9):
 - No `Math.random()` / `Date.now()` / `performance.now()` outside `main.ts` (enforced
   by lint).
 - Input works via Pointer Events on both touch and desktop; `pointercancel` cannot
-  leave the gun stuck firing; canvas gesture-hygiene CSS suppresses scroll/zoom.
+  leave the gun stuck firing; gesture-hygiene CSS suppresses scroll/zoom on the
+  canvas and the UI root.
 - Skeletons (`GameState`, `SceneManager`, `SystemContext`, `EventBus`, `Storage`
   interface) are published and stable for other areas to import.
 
 ## 10. Open questions / risks
 
-- Confirm internal resolution 384×216 vs 320×180 with the Art area before locking
-  HUD layout.
+- The **384×216 arena space** is now purely a simulation coordinate system, not a
+  resolution. Watch for code or docs that still treat it as a framebuffer size — that
+  confusion is the most likely source of layout bugs during and after the migration.
 - Decide whether the registry needs archetype iteration for performance, or whether
   per-component `Map` iteration is sufficient at expected entity counts.
 - Touch/mobile input fidelity: **no longer deferred — mobile is a first-class target.**

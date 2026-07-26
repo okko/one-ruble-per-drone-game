@@ -1,351 +1,409 @@
 # Area: Art & Visual Style
 
-**Owner:** <unassigned> · **Depends on:** Core Platform & Build (render/atlas
-loader), Gameplay Engine (drone type list) · **Depended on by:** HUD & In-game UI,
-Economy & Residents (portraits), Gameplay Engine (sprites), Main Menu, Highscores,
-Random Incidents (visual overlays)
+**Owner:** <unassigned> · **Depends on:** Core Platform & Build, Gameplay Engine
+(drone type list, skyline table) · **Depended on by:** HUD & In-game UI, Economy &
+Residents, Gameplay Engine, Main Menu, Highscores, Random Incidents
 
 ## 1. Purpose
 
-This area defines the **art bible** for "One Ruble Per Drone" — the palette, sprite
-specs, backgrounds, font, and animation guidelines that give the game its bright,
-cheerful 16-bit SNES-era look over a grim satirical premise (GDD §2) — **and** owns
-the **asset-pipeline contract**: the sprite-atlas format, the typed asset manifest
-that maps sprite ids to atlas coordinates/frames, and a placeholder-art provider so
-no other area is ever blocked waiting on final pixels.
+This area defines the **look bible** for "One Ruble Per Drone" and owns the
+**three.js presentation layer** (`src/render/three/`). It specifies the scene's colour
+system, materials, models, lighting rig, post-processing chain, camera language, and
+motion guidelines — the things that make the game read as a modern, cinematic 2026
+console title while keeping the bright-surface / grim-premise contrast that is the
+game's identity (GDD §2).
+
+It also owns the **rendering contract**: the `ThreeView` façade, the arena↔world
+coordinate mapping, the camera state machine, and the graceful no-WebGL fallback — so
+no other area ever talks to `three` directly or has to reason about cameras.
+
+> **Superseded:** the previous pixel-art pipeline (32-swatch frozen palette, sprite
+> atlas, `SPRITE_IDS` registry, bitmap fonts, placeholder sprite provider, Canvas-2D
+> `Renderer`) has been retired wholesale. If you are looking for `PALETTE`,
+> `SpriteProvider`, or `assets.manifest.json`, they no longer exist.
 
 ## 2. Scope
 
 ### In scope
-- The canonical color **palette** (typed, frozen constants in code).
-- **Sprite specifications**: pixel dimensions, frame counts, pivots for every game
-  object (soldier, gun, drones, explosions, ruble, residents, HUD chrome, icons).
-- **Backgrounds**: parallax Moscow skyline layers and day/night palette shifts.
-- **Incident/weather visual overlays** (blackout, flicker, propaganda bars, etc.).
-- **Pixel font** spec for HUD and menus.
-- **Animation guidelines** (frame counts + timing) consumed by Render.
-- The **asset manifest schema**, the **SpriteId registry** (single source of truth),
-  the **atlas format**, and the **placeholder-art provider**.
+- The **scene colour system** (`three/theme.ts`), mirroring the CSS design tokens.
+- **Models & materials**: the soldier, the gun, drone classes, the player's tower,
+  the damageable Moscow skyline, projectiles and effects.
+- The **lighting rig** and the day/night ramp.
+- **Tone mapping and post-processing** (bloom, anti-aliasing, vignette, colour grade).
+- The **camera language** — every pose the camera director can hold and how it moves
+  between them.
+- **Motion & animation** guidelines (timing, easing, damping).
+- **Quality tiers**, the WebGL2 capability probe, context-loss handling, and the
+  per-frame allocation/disposal discipline.
+- **Incident visual treatments** (blackout, propaganda letterbox, pipe drips, …).
 
 ### Out of scope (owned elsewhere)
-- The actual `drawSprite` / canvas blitting and atlas image loading — **Core/Render**
-  consumes this area's manifest and palette (we define the contract; they implement
-  the loader).
-- HUD layout and which icons appear where — **HUD area** (we supply the icons).
-- Drone gameplay stats/behavior — **Gameplay Engine** (we supply the visuals and
+- DOM UI styling, layout, typography, and the CSS design tokens — **HUD & UI (10)**.
+  This area mirrors those tokens into scene colours; it does not define them.
+- Drone gameplay stats/behaviour — **Gameplay Engine** (we supply the visuals and
   agree the type list with them).
-- Producing final, finished pixel art (an art-production task) — this doc defines
-  the specs, ids, and placeholders the engineering depends on; final art slots into
-  the same ids later with zero code changes.
+- Which HUD elements exist and where — **HUD & UI (10)**.
+- Producing final, finished art assets — an art-production task. Everything here is
+  authored **procedurally in code** today (see §3.3), so the game is always renderable
+  and no area is ever blocked waiting on assets.
 
 ## 3. Requirements & mechanics
 
 ### 3.1 Aesthetic direction
-- Bright, saturated SNES-era palette. Sunny skies, glinting onion domes, chunky
-  readable sprites with a 1px dark outline (`ink`).
-- The darkness lives in content/writing, **never** in the rendering: keep colors
-  cheerful even during grim events (a "you soiled yourself" crisis flashes in
-  friendly game-show colors). This contrast is the identity.
-- Target internal resolution **384×216** (per architecture.md §1), integer-scaled.
-  Design every sprite for this resolution; assume `image-rendering: pixelated` (with
-  the Safari fallbacks `-webkit-optimize-contrast`/`crisp-edges` and
-  `imageSmoothingEnabled = false`; see `compatibility.md §2`). Sprites must read
-  crisply when CSS-upscaled from the 384×216 backing buffer on high-DPI screens.
 
-### 3.2 Palette
-A tight 32-swatch palette. Exported from `src/render/palette.ts` as a frozen object;
-**no color literals anywhere else in the codebase** — code references palette keys.
+- **Modern, cinematic, stylised.** Clean geometry, confident silhouettes, physically
+  plausible lighting, filmic tone mapping, restrained bloom. The reference point is a
+  contemporary console game's presentation — not photoreal, not retro.
+- **The contrast is still the identity.** The surface stays bright, warm, and
+  inviting: a sunny Moscow skyline, glinting onion domes, cheerful UI. The darkness
+  lives in the writing and the situation, **never** in the rendering. A "you soiled
+  yourself" crisis is presented in friendly game-show colours. Do not resolve the
+  tension by making the game look grim.
+- **Readability beats fidelity.** A diving drone must be unmistakable against the sky
+  at a glance. Silhouette, value separation, and accent colour do that work; detail
+  never gets in their way.
+- **Depth is a storytelling tool.** Three deliberate depth layers — the rooftop post
+  in the foreground, the player's cut-away tower behind it, the damageable skyline far
+  beyond — make the stakes legible without a word of exposition.
 
-| Group | Key | Hex |
+### 3.2 Colour system
+
+Scene colours live in `src/render/three/theme.ts` as a frozen record of named keys.
+It **mirrors** the CSS custom properties in `src/ui/styles/tokens.css` (owned by area
+10) so the 3D world and the DOM UI cannot drift apart.
+
+Rules:
+
+- **No colour literals outside `theme.ts`.** Scene code references named keys.
+- Keys are **semantic, not literal** — `droneHostile`, `towerConcrete`, `skyDayTop`;
+  never `blue2`. Renaming a hue must not require touching call sites.
+- Colours are authored in **sRGB hex** and converted once at load. Lighting and
+  exposure do the mood work; do not pre-darken a colour to fake night.
+- **No fixed palette-size budget.** The old ≤32-swatch cap was a 16-bit-hardware
+  constraint that no longer applies. Restraint is now a review concern, not a test.
+
+The day and night ramps are the only colours the renderer interpolates between; every
+other key is constant and reacts to light instead.
+
+### 3.3 Models & materials
+
+All geometry is **authored procedurally in code** from three.js primitives — no glTF
+assets, no texture files, no loaders. This keeps the build asset-free and
+dependency-light, keeps everything under version control as readable TypeScript, and
+means the game is never in a half-rendered state waiting on an artist. Swapping in
+authored models later is a `world.ts` change and nothing else.
+
+Materials are `MeshStandardMaterial` with low roughness variance ("PBR-lite"): the
+lighting rig carries the mood, materials just say what a thing is made of.
+
+| Subject | Construction | Notes |
 |---|---|---|
-| Line/shadow | `ink` | `#1a1c2c` |
-|  | `shadow` | `#2b2f4a` |
-| Sky (day) | `skyDayTop` | `#4fc3ff` |
-|  | `skyDayMid` | `#8be9fd` |
-|  | `skyDayLow` | `#fff4b8` |
-| Sky (night) | `skyNightTop` | `#1b1f5c` |
-|  | `skyNightMid` | `#3a2f7a` |
-| Clouds | `cloud` | `#ffffff` |
-| Domes | `domeGold` | `#ffcb3d` |
-|  | `domeTeal` | `#2ec4b6` |
-|  | `domeRed` | `#e84a5f` |
-| Buildings | `concrete` | `#9aa0b5` |
-|  | `concreteDk` | `#6b7088` |
-|  | `windowLit` | `#ffe066` |
-|  | `windowDark` | `#3b4a6b` |
-| Soldier | `uniform` | `#6e7d3b` |
-|  | `uniformDk` | `#4a5526` |
-|  | `skin` | `#f2c79a` |
-|  | `skinDk` | `#c98e63` |
-| Gun/FX | `gunmetal` | `#5a6172` |
-|  | `gunmetalDk` | `#353a4a` |
-|  | `flash` | `#fff3b0` |
-|  | `flashHot` | `#ff9f1c` |
-| Drones | `droneBody` | `#4b5063` |
-|  | `droneScout` | `#5ad1ff` |
-|  | `droneBomber` | `#ff5d5d` |
-|  | `droneSwarm` | `#b06cff` |
-|  | `droneBoss` | `#ff2e63` |
-| Explosion/smoke | `explYellow` | `#ffd23f` |
-|  | `explOrange` | `#ff7b00` |
-|  | `smoke` | `#c7ccd6` |
-| Economy | `rubleGold` | `#ffd93d` |
-| UI | `panel` | `#2440a0` |
-|  | `panelLite` | `#4f7cff` |
-|  | `cream` | `#fff6e6` |
-|  | `accentPink` | `#ff5db1` |
-| Meters | `meterGood` | `#3ddc84` |
-|  | `meterWarn` | `#ffb627` |
-|  | `meterCrit` | `#ff3b3b` |
+| Player's tower | Back + two side walls, per-storey floor slabs, emissive back-glow panel per floor | Deliberately **cut away** — the front face is omitted so the camera can drop inside. 32 storeys. |
+| Roof deck | Capping slab + low parapet rails | The firing post. Its top face is the ground plane for the soldier (§3.4). |
+| Residents | Simple capsule figures on occupied floors | Read as presence, not portraiture. |
+| Moscow skyline | One tower per `content.combat.skyline.buildings` entry; a stack of slab meshes with an emissive window panel | `building.cut` hides slabs from the top — damage is literally geometry removed, repair restores it. |
+| Drones | Faceted low-poly bodies, scaled by `drone.radius`, tinted by class | Constant idle tumble so they read as airborne. |
+| Projectiles | Small emissive spheres | Pooled; see §3.9 for the muzzle-blend rule. |
+| Gun | Barrel cylinder on a yaw pivot + emissive muzzle sphere | Barrel pivots at one end; the muzzle is the visible source of fire. |
+| Soldier | §3.4 | — |
+| Sky | Large inward-facing backdrop, tinted by the day/night ramp | Plus a sun/moon billboard tracking the cycle. |
 
-> The table lists ~37 keys; the budget for the *core* palette is **≤32** simultaneous
-> hues — the meter/UI accents (`meterGood/Warn/Crit`, `panel*`, `accentPink`,
-> `cream`, `rubleGold`) overlap with the sky/explosion ramps in practice. The test
-> in §8 enforces a hard cap of **32 unique hex values**; if we exceed it, dedupe
-> near-duplicates (e.g. reuse `explYellow` for `windowLit`).
+**Pooling is mandatory.** Drone and projectile meshes are allocated once and hidden
+when unused, never created per frame. Geometries and materials are shared across
+instances of the same class.
 
-### 3.3 Sprite specifications
+### 3.4 The soldier (rooftop post)
 
-All sizes in source pixels at 384×216 internal res. Default pivot is **center-bottom**
-unless noted; drones/projectiles/explosions use **center**.
+The soldier is the emotional anchor of the frame and has hard placement requirements.
 
-| Subject | Sprite id(s) | Size (px) | Frames | Notes |
-|---|---|---|---|---|
-| Soldier at post (idle/fire/recoil) | `soldier.idle`, `soldier.fire` | 32×40 | idle 2, fire 2 | seated/braced; ushanka; recoil offset done in code |
-| Soldier states (yawn/desperate) | `soldier.tired`, `soldier.crisis` | 32×40 | 2 each | swapped when meters critical |
-| Machine gun | `gun.base` | 28×16 | 1 | rotates around mount pivot |
-| Muzzle flash | `gun.flash` | 16×16 | 3 | additive-feel, `flash`/`flashHot` |
-| Drone — Scout (fast/weak) | `drone.scout` | 16×16 | 4 (rotor) | `droneScout` accent |
-| Drone — Bomber (slow/tough, damages post) | `drone.bomber` | 24×24 | 4 | `droneBomber` accent |
-| Drone — Swarm (tiny, many) | `drone.swarm` | 12×12 | 2 | `droneSwarm` accent |
-| Drone — Armored (needs 2+ hits) | `drone.armored` | 24×20 | 4 | metal plating |
-| Drone — Special/jackpot (colored) | `drone.special` | 16×16 | 4 | tints by code for letter sequences |
-| Drone — Boss/Mega | `drone.boss` | 48×48 | 6 | major-attack incident |
-| Decoy bird (penalty if shot) | `decoy.bird` | 16×12 | 3 | bird-flock incident |
-| Projectile/tracer | `fx.tracer` | 4×4 | 1 | mostly code-drawn line + this tip |
-| Explosion | `fx.explosion` | 32×32 | 6 | ~50ms/frame |
-| Small hit spark | `fx.spark` | 8×8 | 3 | on armored deflection |
-| Ruble pickup/coin | `pickup.ruble` | 8×8 | 4 (shine) | optional floating pickup |
-| Resident portrait | `portrait.<id>` | 64×64 | 1–2 (talk) | bust framing for interaction UI |
-| HUD panel chrome | `ui.panel`, `ui.panel.corner` | 9-slice | 1 | cheerful `panel`/`panelLite` |
-| Meter bar (frame + fill) | `ui.meter.frame`, `ui.meter.fill` | 48×8 | 1 | fill tinted good/warn/crit in code |
-| Button (normal/hover/press) | `ui.btn`, `ui.btn.hover`, `ui.btn.press` | 9-slice | 1 | menus |
-| Need icons | see §3.4 | 12×12 | 1 | — |
+1. **He stands on the roof of the skyscraper he is operating from.** His feet rest on
+   the **top face of the roof deck** — not floating above it, not sunk into it, not
+   parked at an arbitrary height near the gun. The placement is derived from the deck
+   geometry, so changing the deck thickness cannot desynchronise him from it.
+2. **He is not parented to the gun.** He is a sibling of the gun on the roof, not a
+   child of its pivot. A gun that pitches its barrel skyward must not tip the soldier
+   with it. His **body yaw** follows the aim direction, damped and clamped to a
+   plausible human range; his vertical axis stays vertical.
+3. **He is a recognisable human figure**, not a placeholder solid: boots, legs,
+   greatcoat torso, arms reaching to the gun grips, head, and the ushanka. Roughly
+   1.8 world units tall — read the storey height from the tower, never hard-code a
+   scale factor that a tower change would invalidate.
+4. **He is posed by state**, carrying over the four states the retired sprite set had:
+   `idle` (settled, slow breathing), `fire` (braced, recoil kick), `tired` (slumped
+   shoulders, head dipping — driven by the sleep meter), `crisis` (tense, jittery —
+   driven by any meter in crisis). Transitions are damped, never snapped.
+5. **He is always somewhere legible.** In interior mode he is *inside the building*
+   on the floor being visited — he walked down there — and the rooftop post correctly
+   shows an unattended gun. He is never simply switched invisible.
+6. **The camera must show him.** The `shooting` pose is framed over his shoulder so
+   he and the parapet anchor the foreground with the skyline beyond (§3.7).
 
-> **Drone type list is provisional** (`scout`, `bomber`, `swarm`, `armored`,
-> `special`, `boss`) and **must be reconciled with the Gameplay Engine area**. Sprite
-> ids follow whatever final set is agreed; the registry in §4 is the single source of
-> truth both areas import.
+### 3.5 Lighting & day/night
 
-### 3.4 Need indicators — pixel icons
-- **All five need indicators are custom 12×12 pixel icons in the atlas** (😴 sleep,
-  🍞 hunger, 💧 thirst, 🚬 vice, 💩 poo) — **none** are rendered as canvas `fillText`
-  emoji. Justification: (a) visual consistency with the pixel art — system emoji break
-  the 16-bit illusion and vary per OS; (b) deterministic rendering, testability, and
-  per-engine snapshot stability; (c) full palette control (`compatibility.md §2`).
-- **The poo icon must clearly read as the poo emoji 💩.** Per the owner (GDD §5), the
-  requirement is that it *looks like* 💩 — not that it is the literal system glyph — so
-  it is authored as a pixel-art icon like the other four (the swirl-and-face poo
-  silhouette). Its incongruity among the needs is on-theme.
-- Provide an **emoji-glyph fallback** path in the manifest (`glyph` field) so any icon
-  (incl. `icon.poo`, glyph `💩`) can fall back to a system emoji if its pixel art is
-  missing — used by the placeholder provider only, to keep areas unblocked.
-- Icon ids: `icon.sleep`, `icon.poo` (depicts 💩), `icon.hunger`, `icon.thirst`,
-  `icon.vice`, plus `icon.ruble`.
+- **Rig:** one hemisphere light (sky/ground bounce) + one directional key light
+  standing in for the sun. Ambient-only lighting flattens the towers and is not
+  acceptable.
+- **Day/night ramp:** a single `daylight ∈ [0,1]` value from `core/difficulty` drives
+  *everything* — sky tint, hemisphere and key intensity, key colour temperature, the
+  sun/moon billboard, and window emissive strength. One input, no independently
+  drifting knobs.
+- **Windows carry the night.** As daylight falls, window emissive rises; a night
+  skyline should read as a field of warm lit windows, which is also the clearest
+  possible feedback for how much of the city is still standing.
+- **Shadows:** the key light casts shadows on the medium and high tiers only, from the
+  rooftop post — the area the player actually looks at. The skyline does not
+  self-shadow; it is too far away to earn the cost.
+- **Exposure, not paint.** Mood comes from light intensity and tone mapping. Do not
+  darken material colours to simulate night.
 
-### 3.5 Backgrounds — parallax skyline & day/night
-- **Layers (back→front):** `bg.sky` (gradient, code-drawn from palette), `bg.far`
-  (distant onion-dome skyline, slow parallax), `bg.mid` (brutalist towers), `bg.near`
-  (the rooftop edge / sandbags around the post). Parallax factors ~`0.1 / 0.3 / 0.6`.
-- **Day/night:** the sky gradient and a global tint interpolate between day
-  (`skyDay*`) and night (`skyNight*`) palettes driven by `time.phase`/a 0–1 daylight
-  value provided by the Gameplay Engine/Meters time system. Lit windows (`windowLit`)
-  fade in at night. Provide a `daylight(t)` → palette-mix spec so Render can lerp.
-- **Sun/moon** sprite `bg.sun` / `bg.moon` (16×16) tracks the cycle.
+### 3.6 Tone mapping & post-processing
 
-### 3.6 Incident & weather overlays
-Visual treatments the Random Incidents area triggers (we define how they *look*):
-- **Blackout (electrical):** darken everything via a `shadow` multiply overlay to
-  ~25% brightness; only muzzle flash + drone accents readable.
-- **HUD flicker:** code-driven alpha jitter on HUD layer.
-- **Propaganda broadcast:** cheerful `panel`/`accentPink` letterbox bars + a portrait.
-- **Pipe failure:** a small dripping `fx.drip` motif near the toilet UI.
-- **Supply shortage / inspection:** a banner using `ui.panel`.
-All overlays must respect the **reduced-flashing** accessibility flag (§7).
+- **Output:** `ACESFilmicToneMapping` with `SRGBColorSpace` output. Exposure is a
+  single tunable that the day/night ramp may nudge.
+- **Chain** (`three/post.ts`, built on the addons bundled with `three`):
+  `RenderPass` → bloom → SMAA → output. Bloom is **restrained** — it exists to make
+  the muzzle flash, lit windows, and explosions feel hot, not to haze the frame.
+- **Vignette and colour grade** are subtle and permanent; they unify the frame. They
+  must never reduce the contrast between a drone and the sky.
+- The whole chain is **skipped on the low tier** and whenever `reducedFlash` is set,
+  falling back to a direct render. The game must look coherent, not broken, without it.
 
-### 3.7 Pixel font
-- **Recommendation:** a **baked bitmap font in the atlas**, two sizes: an **8×8**
-  display/menu font and a denser **5×7** HUD font. Justification: no web-font network
-  load (no FOUT/flake), fully deterministic and testable, palette-tintable.
-- Glyph coverage: ASCII 32–126 plus `₽` (ruble sign) and arrows. Cyrillic optional
-  later; copy is satirical English by default.
-- Manifest exposes the font as a sprite strip + a `glyphWidth`/`glyphHeight`/`first
-  charcode` descriptor so Render's text routine can index it.
+### 3.7 Camera language
 
-### 3.8 Animation guidelines (frame counts + timing)
-Render consumes these; "code-driven" means no atlas frames, animated by transform.
-- **Gun fire:** 3-frame `gun.flash`, ~60–90 ms total (~25 ms/frame); 2px code recoil
-  kickback decaying over ~120 ms.
-- **Drone movement:** 2–4 frame rotor loop at **10–12 fps**; vertical bob is
-  code-driven (sine), not frames.
-- **Explosion:** 6 frames at ~**50 ms/frame** (~300 ms); spawn 2–3 `smoke` puffs
-  (code-driven, fade over ~500 ms).
-- **Meter crisis flash:** **code-driven** blink between `meterCrit` and `cream` at
-  **~4 Hz**; **disabled** (steady `meterCrit`) when reduced-flashing is on.
-- **Score pop:** code-driven scale 1.4→1.0 + 6px rise over ~**400 ms**, ease-out;
-  digits are font glyphs tinted `cream` with `ink` shadow.
-- **Coin/ruble:** 4-frame shine loop at 8 fps, or a code-driven spin.
+All camera behaviour lives in **one state machine**, `three/camera-director.ts`. No
+other module positions a camera. Poses are `{ eye, look, fov }` records produced by
+pure functions, so framing is unit-testable without a GPU.
+
+| State | Framing | Feel |
+|---|---|---|
+| `menu` | Slow orbit/crane around the player's tower, skyline behind | Alive, unhurried, attract-mode |
+| `intro` | Starts low at the tower's ground floor, cranes up the cut-away to the roof | Establishes where you are and how far up |
+| `shooting` | Over the soldier's shoulder; he and the parapet anchor the foreground, skyline mid-frame, sky above | The default play framing |
+| `interior` | Drops down the cut-away to the floor being visited | Intimate, domestic — the opposite of the roof |
+| `pause` | Holds the current pose, motion damped out | Calm, clearly suspended |
+
+Transitions are **eased blends between poses**, never cuts. Blend rates are damped
+per-second so they are frame-rate independent.
+
+**Aiming is decoupled from framing.** A separate camera is pinned to the canonical
+`shooting` pose and never moves; `screenToWorld` ray-casts through it against the
+fixed action plane. The player's aim therefore stays exact while the render camera
+cranes, blends, or sits inside the building. That pinned camera must be **derived
+from the director's pose** — a hand-copied duplicate will silently drift out of sync
+and break aiming.
+
+### 3.8 Incident visual treatments
+
+How the Random Incidents area's flags look. Scene-side treatments live in the three.js
+layer; UI-side treatments are area 10's.
+
+| Incident | Treatment |
+|---|---|
+| Blackout (electrical) | Window emissive to near-zero and key/hemisphere intensity down hard; the muzzle flash and drone accents become the only bright things. Reads as the city going dark, not as a black screen. |
+| Propaganda broadcast | Cheerful letterbox bars + portrait in the **DOM layer** (area 10) — crisper as DOM than as geometry. |
+| Pipe failure | Drip particles near the affected floor; a matching motif on the toilet affordance in the UI. |
+| Supply shortage / inspection | A DOM banner (area 10); no scene change. |
+| Air-raid siren / incoming wave | Warm pulse on the rooftop lighting, synchronised with the UI siren banner. |
+
+Every treatment must respect **`reducedFlash`**: no strobing, no rapid luminance
+swings. Substitute a steady state at the same readability.
+
+### 3.9 Motion & animation
+
+All animation is **code-driven** — there are no keyframed clips.
+
+- **Damping, not lerping-by-frame.** Use a per-second damping factor
+  (`k = 1 - exp(-rate * dt)`, or an equivalent clamped form) so behaviour is identical
+  at 30 fps and 144 fps. A raw `x += (target - x) * 0.1` per frame is frame-rate
+  dependent and is a bug.
+- **Muzzle flash:** a short emissive pop (~50 ms) on each shot, plus a small recoil
+  kick on the barrel that decays out.
+- **Tracer reconciliation:** the simulation fires from a flat arena point, but the
+  visible muzzle sits on the roof at the tower's depth. A projectile carries the
+  muzzle offset at spawn and **sheds it linearly over its first stretch of travel**,
+  so a shot leaves the barrel as a straight line and settles onto its true path far
+  off-screen. Never snap a tracer back toward the post — it reads as a visual bug.
+- **Drones:** constant slow tumble; vertical bob is procedural, never keyframed.
+- **Skyline damage:** a slab disappearing is a *beat* — it earns a brief emphasis, not
+  a silent pop.
+- **Idle life:** the soldier breathes, the sun tracks, windows flicker faintly. A
+  static frame is a dead frame.
+- **`reducedMotion`** shortens or removes every non-essential tween — camera orbit,
+  breathing, bob — while leaving gameplay-critical motion (drones, tracers) intact.
+
+### 3.10 Quality tiers & robustness
+
+| Tier | Post-processing | Shadows | Pixel ratio |
+|---|---|---|---|
+| High | Full chain | On | `min(dpr, 3)` |
+| Medium | Bloom + SMAA | On, reduced map | `min(dpr, 2)` |
+| Low | None | Off | `1` |
+
+- Tier selection is automatic with a manual override in Settings; `reducedFlash`
+  forces at most Medium.
+- **Never trade simulation rate for visuals.** The fixed-timestep loop is untouchable;
+  degrade the picture instead.
+- **WebGL2 probe:** acquire the context directly and **silently** bail to a no-op view
+  when it is unavailable, so the sim and the DOM UI keep running (`compatibility.md
+  §2`). Letting `THREE.WebGLRenderer` acquire it logs a console error first, which
+  fails the strict no-console-error smokes on WebGL-less CI engines.
+- **Context loss** is handled, not ignored: stop rendering on `webglcontextlost`,
+  rebuild on `webglcontextrestored`.
+- **Disposal:** `dispose()` releases geometries, materials, render targets, and the
+  post chain.
 
 ## 4. Public interface (TypeScript)
 
 ```ts
-// src/render/palette.ts
-export const PALETTE = Object.freeze({
-  ink: '#1a1c2c', /* …all keys from §3.2… */ meterCrit: '#ff3b3b',
+// src/render/three/theme.ts — named scene colours, mirroring src/ui/styles/tokens.css
+export const THEME = Object.freeze({
+  skyDayTop: '#4fc3ff', skyNightTop: '#1b1f5c',
+  towerConcrete: '#9aa0b5', windowLit: '#ffe066',
+  uniform: '#6e7d3b', skin: '#f2c79a', gunmetal: '#5a6172',
+  flash: '#fff3b0', flashHot: '#ff9f1c',
+  droneScout: '#5ad1ff', droneBomber: '#ff5d5d', droneSwarm: '#b06cff', droneBoss: '#ff2e63',
+  /* … */
 } as const);
-export type PaletteKey = keyof typeof PALETTE;
+export type ThemeKey = keyof typeof THEME;
 
-// src/content/sprite-ids.ts — SINGLE SOURCE OF TRUTH for every sprite id
-export const SPRITE_IDS = [
-  'soldier.idle', 'soldier.fire', 'soldier.tired', 'soldier.crisis',
-  'gun.base', 'gun.flash',
-  'drone.scout', 'drone.bomber', 'drone.swarm', 'drone.armored',
-  'drone.special', 'drone.boss', 'decoy.bird',
-  'fx.tracer', 'fx.explosion', 'fx.spark', 'fx.drip',
-  'pickup.ruble',
-  'ui.panel', 'ui.panel.corner', 'ui.meter.frame', 'ui.meter.fill',
-  'ui.btn', 'ui.btn.hover', 'ui.btn.press',
-  'icon.sleep', 'icon.poo', 'icon.hunger', 'icon.thirst', 'icon.vice', 'icon.ruble',
-  'bg.sun', 'bg.moon',
-  'font.display', 'font.hud',
-  // portrait.* ids are registered dynamically from the resident roster (Economy area)
-] as const;
-export type SpriteId = (typeof SPRITE_IDS)[number] | `portrait.${string}`;
+// src/render/three/mapping.ts — PURE. No `three` import, so it is node-testable.
+export const ARENA_W = 384;
+export const ARENA_H = 216;
+/** Arena x → world x. */        export function ax(x: number): number;
+/** Arena y → world y (arena y is down, world y is up). */
+                                  export function ay(y: number): number;
+/** World (x,y) on the action plane → arena coordinate. Exact inverse of ax/ay. */
+export function toArena(worldX: number, worldY: number): Vec2;
 
-// src/content/assets.ts — manifest types
-export interface AssetManifest {
-  version: number;
-  atlas: { image: string; width: number; height: number };
-  sprites: Record<string, SpriteDef>;
+// src/render/three/camera-director.ts — the ONLY owner of camera poses.
+export type CameraState = 'menu' | 'intro' | 'shooting' | 'interior' | 'pause';
+export interface CameraPose { eye: Vec3; look: Vec3; fov: number; }
+/** PURE: the canonical pose for a state at normalised progress t ∈ [0,1]. */
+export function poseFor(state: CameraState, t: number, ctx: PoseContext): CameraPose;
+/** PURE: eased blend between two poses. */
+export function blendPose(a: CameraPose, b: CameraPose, k: number): CameraPose;
+export interface CameraDirector {
+  /** Request a state; the director eases into it. `intro` restarts its crane. */
+  setState(state: CameraState): void;
+  update(dt: number, ctx: PoseContext): void;
+  /** The canonical, never-moving `shooting` pose the aim raycast uses. */
+  readonly aimPose: CameraPose;
 }
-export interface SpriteDef {
-  x: number; y: number; w: number; h: number;
-  pivot?: [number, number];            // default [w/2, h] (center-bottom)
-  glyph?: string;                       // emoji/text fallback (e.g. '💩')
-  anim?: { frames: number; fps: number; layout: 'horizontal' | 'rects'; rects?: Rect[] };
-  font?: { glyphW: number; glyphH: number; firstCharCode: number };
-}
-export interface Rect { x: number; y: number; w: number; h: number; }
 
-// src/render/sprite-provider.ts — both real & placeholder conform
-export interface SpriteProvider {
-  has(id: SpriteId): boolean;
-  resolve(id: SpriteId, frame?: number): ResolvedSprite; // throws on unknown id
+// src/render/three/view.ts — the façade every other area talks to.
+export interface ThreeView {
+  resize(cssW: number, cssH: number): void;
+  /** Canvas-relative pixel → arena coordinate, via the fixed aim camera. */
+  screenToWorld(canvasX: number, canvasY: number): Vec2;
+  render(gs: GameState, alpha: number, vs: PlayingViewState): void;
+  setCameraState(state: CameraState): void;
+  startIntro(): void;
+  setVisible(visible: boolean): void;
+  dispose(): void;
 }
-export interface ResolvedSprite {
-  source: 'atlas' | 'placeholder' | 'glyph';
-  rect: Rect; pivot: [number, number]; glyph?: string;
-}
+/** Returns a silent no-op view when WebGL2 is unavailable. Never throws. */
+export function createThreeView(canvas: HTMLCanvasElement, content: Content): ThreeView;
 ```
 
 ## 5. Data / content tables
 
-- `src/content/assets.manifest.json` — the atlas manifest (validated against the
-  schema in §8). One real-art version and the loader auto-falls-back to placeholders
-  for any missing id.
-- `src/render/palette.ts` — the frozen palette (§3.2).
-- `src/content/sprite-ids.ts` — the `SpriteId` registry (§4); the contract every
-  area imports instead of hard-coding string ids.
-- Atlas image: a single PNG sprite sheet, **512×512** max, power-of-two; multiple
-  sheets allowed later via `atlas.image` per-manifest (v2).
+This area defines **no content tables** and ships **no asset files**. It consumes:
+
+- `content.combat.skyline` — building positions, widths, heights, storey counts.
+- `content.combat.gun.pivot` — the arena-space firing column.
+- `content.economy.roster` — resident floors, for the tower's occupied interiors.
+- `content.drones` — the drone class list, for accent colours.
+
+Geometry and colour live in code (`three/world.ts`, `three/theme.ts`). There is no
+manifest, no atlas, and no `SpriteId` registry — all retired.
 
 ## 6. Persistence
 
-**None** written by this area. It **consumes** two accessibility flags owned by the
-Settings/Persistence area (`Settings.accessibility`, 09 §5): `reducedFlash` (disables
-crisis/flicker blinking) and `reducedMotion` (shortens/removes non-essential tweens). If those
-flags are absent, default to flashing/motion **on**.
+**None** written by this area. It **consumes** the accessibility flags owned by
+Settings/Persistence (`Settings.accessibility`, 09 §5): `reducedFlash` (suppresses
+flashing and forces a lower quality tier) and `reducedMotion` (shortens or removes
+non-essential tweens). If absent, default to flashing/motion **on**.
 
 ## 7. Dependencies & integration
 
-- **Core/Render** loads `assets.manifest.json` + the atlas image, constructs the real
-  `SpriteProvider`, and falls back to the **placeholder provider** for any id not yet
-  in the atlas. We own both providers' contract; Render owns the blit.
-- **Gameplay Engine**: agree the final drone type list; sprite ids track it.
-- **Economy & Residents**: supplies the resident roster; `portrait.<id>` ids are
-  registered from that roster, and the validation test (§8) checks each roster id has
-  a portrait or a placeholder.
-- **HUD / Menus / Highscores / Incidents**: consume palette keys, icons, chrome
-  sprites, the font, and overlay specs.
-- Emits **no events**; purely provides data + draw-spec contracts.
+- **Core Platform** owns `main.ts`, which constructs the view and drives `resize()`.
+- **Gameplay Engine** owns `Playing`, which calls `render(gs, alpha, vs)` each frame
+  and supplies the `PlayingViewState` view model.
+- **HUD & UI (10)** owns the design tokens this area mirrors, and drives
+  `setCameraState` for the menu/pause backdrop.
+- **Random Incidents** sets the flags the treatments in §3.8 react to.
+- Emits **no events**; it is a pure consumer of state.
 
-### Placeholder-art plan (un-blocks everyone)
-- `PlaceholderProvider implements SpriteProvider` draws **palette-keyed colored
-  shapes** for every `SpriteId`: drones as accent-colored circles, soldier/gun as
-  labeled rects, explosions as expanding yellow rings, icons as their `glyph` (emoji)
-  or a colored square with a 1-letter label, font as the system monospace.
-- A single boolean (`useRealAtlas`, defaulting to whatever the manifest supports per
-  id) selects real-vs-placeholder **per id**, so partially-finished art works.
-- Therefore other areas code against `SpriteId`s from day one and never wait on art.
+**The hard rule:** this area **never mutates `GameState`**. It reads state and draws.
+Any frame-to-frame value it needs (animation phase, damping) is renderer-local and
+must not feed back into the simulation — that is what keeps the determinism goldens
+valid.
 
 ## 8. Required automated tests (MUST pass)
 
 Per architecture.md §7 — `tsc --noEmit`, ESLint, and `vitest run` must all be green.
+The testable surface here is the **pure** math; WebGL itself is smoke-tested in the
+Playwright matrix, not unit-tested.
 
-1. **Manifest schema validation:** `assets.manifest.json` validates against the
-   `AssetManifest`/`SpriteDef` schema — correct types, no negative `x/y/w/h`,
-   `frames ≥ 1`, `fps > 0` when `anim` present, `version` is a positive int.
-2. **Atlas-bounds:** every sprite rect — and every animation frame rect (computed for
-   `layout:'horizontal'` or each `rects[]` entry) — lies fully within
-   `atlas.width × atlas.height`. No overlaps for distinct ids (warning-level allowed).
-3. **No dangling ids (forward):** every id in `SPRITE_IDS` resolves to a manifest
-   entry **or** has a defined `glyph`/placeholder; `provider.resolve(id)` never throws
-   for a registered id.
-4. **No orphan entries (reverse):** every manifest sprite key is a known `SpriteId`
-   (or a `portrait.*`); flag unknown keys.
-5. **Referenced-id coverage:** a static scan of `src/` + `src/content/` data for
-   sprite-id usages confirms each referenced id is in `SPRITE_IDS` (catches typos and
-   ad-hoc string ids).
-6. **Palette frozen & valid:** `Object.isFrozen(PALETTE)` is true; every value matches
-   `/^#[0-9a-f]{6}$/`; **unique hex count ≤ 32** (enforces the budget in §3.2).
-7. **Placeholder parity:** `PlaceholderProvider.has(id)` is true and `resolve(id)`
-   returns a non-null `ResolvedSprite` for **every** `SpriteId` (and a sampled set of
-   `portrait.*` ids) — guarantees nothing is unrenderable.
-8. **Pivot defaults:** `resolve` applies center-bottom default pivot when `pivot` is
-   omitted, and the given pivot otherwise (unit test).
-9. **Font descriptor:** `font.display`/`font.hud` carry a valid `font{}` descriptor;
-   a text-measurement helper returns expected width for a known string.
+1. **Arena↔world round-trip:** for a grid of arena points spanning the play area,
+   `toArena(ax(p.x), ay(p.y))` returns `p` within floating-point tolerance. This is
+   the test that catches a broken aim mapping.
+2. **Mapping anchors:** the firing post maps to the roof height, and arena x-centre
+   maps to world x-origin — pinning the two anchors the whole scene hangs off.
+3. **Camera poses are total:** `poseFor` returns a finite, well-formed pose for every
+   `CameraState` and for `t` at 0, 0.5, and 1 — no NaN, no zero `fov`.
+4. **Pose blending:** `blendPose(a, b, 0) === a`, `blendPose(a, b, 1) === b`, and
+   intermediate values are bounded by the endpoints per component.
+5. **Director transitions:** `setState` eases rather than snaps (the pose after one
+   small `update` is strictly between the old and new poses); `startIntro` restarts
+   the crane from the beginning.
+6. **Aim pose is stable:** `aimPose` is unchanged after the director has been driven
+   through `menu`, `interior`, and `pause` — the guarantee that aiming cannot drift.
+7. **Soldier placement:** the soldier's feet sit on the roof-deck top face (computed
+   from the deck geometry, not a literal), and his transform does **not** inherit the
+   gun's barrel rotation.
+8. **Damping is frame-rate independent:** stepping the damping helper once with `dt`
+   and twice with `dt/2` converge within tolerance.
+9. **Theme integrity:** `Object.isFrozen(THEME)`; every value matches
+   `/^#[0-9a-f]{6}$/i`.
+10. **No-WebGL fallback:** `createThreeView` with a canvas whose `getContext` returns
+    `null` yields a working no-op view — every method callable, nothing thrown,
+    **nothing logged to the console**.
 
 ## 9. Acceptance criteria / Definition of done
 
 On top of the global DoD (architecture.md §9):
-- [ ] `PALETTE` exported, frozen, ≤32 unique hexes; no color literals elsewhere in
-      the codebase (lint rule or test).
-- [ ] `SPRITE_IDS`/`SpriteId` registry is the only place sprite-id strings are
-      declared; all areas import from it.
-- [ ] `AssetManifest` schema + a real `assets.manifest.json` (may reference a stub
-      atlas) both present and validated by tests.
-- [ ] Both `SpriteProvider` implementations (real loader contract + placeholder)
-      satisfy the interface; placeholder covers 100% of `SpriteId`s.
-- [ ] Drone type list reconciled with Gameplay Engine; ids updated to match.
-- [ ] Animation/timing table (§3.8) and overlay specs (§3.6) documented for Render.
-- [ ] Sprites read crisply when CSS-upscaled on high-DPI/mobile with the
-      `image-rendering` fallbacks; all five need-icons are pixel-art sprites (the poo
-      icon reads as 💩), pixel-consistent across engines (`compatibility.md §2`).
+- [ ] `THEME` exported and frozen; no colour literals elsewhere in `render/three/`.
+- [ ] Theme keys and the CSS tokens in `src/ui/styles/tokens.css` agree.
+- [ ] `camera-director.ts` is the sole owner of camera poses; no pose math anywhere
+      else, including `view.ts`.
+- [ ] The aim camera is derived from the director's canonical `shooting` pose and
+      never moves.
+- [ ] **The soldier stands on the roof deck of his own tower**, feet on its top face,
+      un-parented from the gun, posed by meter state, and clearly framed by the
+      `shooting` camera.
+- [ ] Day/night is driven by the single `daylight` value; tone mapping and the post
+      chain are in place and skipped correctly on the low tier / `reducedFlash`.
+- [ ] No per-frame allocations in the render loop; drone and projectile meshes are
+      pooled; `dispose()` releases everything.
+- [ ] Missing WebGL2 degrades silently to the no-op view with the DOM UI fully usable.
 - [ ] All §8 tests authored and passing; `npm run check` green.
 
 ## 10. Open questions / risks
 
-- **Drone roster churn:** if Gameplay Engine changes drone types, sprite ids and the
-  placeholder map must follow. Mitigated by the single `SPRITE_IDS` registry.
-- **Emoji rendering variance — RESOLVED (`compatibility.md §2`):** all five need-icons
-  (incl. poo, a pixel-art sprite that reads as 💩) are atlas sprites, so they are
-  pixel-identical across engines and snapshot-tested together. The only place a system
-  emoji can still appear is the optional `glyph` fallback used by the placeholder
-  provider before real art lands — and there per-OS variance is harmless.
-- **Palette budget pressure:** 16-bit feel wants restraint, but UI + meters + sky
-  ramps compete for the 32 slots. May need to share ramps (test enforces the cap).
-- **Atlas growth:** one 512×512 sheet may not hold portraits for a large resident
-  roster; v2 manifest allows multiple atlas images.
-- **Reduced-motion semantics — RESOLVED:** the persisted accessibility flags are
-  `reducedFlash` / `reducedMotion` (`Settings.accessibility`, docs/areas/09 §5).
+- **Aim/framing coupling is the sharpest risk in this area.** Re-framing the
+  `shooting` camera without re-deriving the aim camera silently misaligns every shot,
+  and nothing but test §8.1/§8.6 will catch it. Never duplicate the pose by hand.
+- **Procedural geometry has a ceiling.** Code-authored primitives will carry the game
+  a long way, but a genuinely bespoke soldier or drone silhouette eventually wants an
+  authored model. The `world.ts` seam keeps that a contained change; adding a loader
+  is a lead decision (new asset pipeline, new bundle cost).
+- **Mobile fill rate.** Bloom at high DPR is the most likely mobile regression. The
+  tier system is the mitigation; the §7 perf budget in `compatibility.md` is the gate.
+- **Emoji variance — accepted, not resolved.** Status icons are system emoji in the
+  DOM layer and legitimately differ per platform (`compatibility.md §2`). Screenshot
+  assertions must mask them.
+- **Drone roster churn:** a new drone class needs an accent colour and a silhouette;
+  the class→colour mapping is the single place to update.
+- **Reduced-motion semantics — RESOLVED:** the persisted flags are `reducedFlash` /
+  `reducedMotion` (`Settings.accessibility`, docs/areas/09 §5).
