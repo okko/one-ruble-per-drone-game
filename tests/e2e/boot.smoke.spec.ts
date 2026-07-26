@@ -37,6 +37,10 @@ test('boots to a full-viewport world canvas and a mounted UI, with no console er
 
 // --- Remaining compatibility.md §8 suite (unblock as each area lands) ---
 test('tap starts a run; held fire sweeping the sky destroys a drone; release ceases fire (§8.15)', async ({ page }) => {
+  // The aim loop below is closed over real frames, and every round-trip to the page costs wall clock.
+  // Budget it generously so a busy machine running the whole matrix in parallel cannot turn a genuine
+  // pass into a false failure — a flaky required gate is worse than no gate.
+  test.setTimeout(60_000);
   const errors: string[] = [];
   page.on('console', (m) => {
     if (m.type() === 'error') errors.push(m.text());
@@ -88,7 +92,10 @@ test('tap starts a run; held fire sweeping the sky destroys a drone; release cea
   await page.keyboard.down('Space');
   let downed = 0;
   let lock: { x: number; y: number } | null = null; // commit to one drone (focus fire) until it's gone
-  for (let i = 0; i < 320 && downed === 0; i++) {
+  // Bounded by wall clock, not by iteration count: under parallel load each iteration costs more, so a
+  // fixed count would silently shrink the time the gun actually gets to track a target.
+  const deadline = Date.now() + 40_000;
+  while (downed === 0 && Date.now() < deadline) {
     const s = await readState();
     downed = s.downed;
     if (downed > 0) break;
@@ -170,4 +177,78 @@ test.fixme('localStorage round-trips; in-memory fallback engages when storage th
 });
 test.fixme('mobile-viewport run holds the frame-time budget under CPU throttling', () => {
   // area 01 Gameplay Engine (representative drone count)
+});
+
+test('with WebGL unavailable the world falls back silently and the DOM UI stays usable (§8.1)', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('console', (m) => {
+    if (m.type() === 'error') errors.push(m.text());
+  });
+  page.on('pageerror', (e) => errors.push(e.message));
+
+  // Deny every GL context before any app code runs. This is the CI-Firefox / blocklisted-GPU /
+  // software-rasteriser-refused case, and it must be SILENT: the probe in `createThreeView` returns
+  // the no-op view rather than letting THREE.WebGLRenderer log its own error first.
+  await page.addInitScript(() => {
+    const real = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function patched(
+      this: HTMLCanvasElement,
+      id: string,
+      ...rest: unknown[]
+    ) {
+      if (id === 'webgl' || id === 'webgl2' || id === 'experimental-webgl') return null;
+      return (real as (this: HTMLCanvasElement, ...a: unknown[]) => unknown).call(this, id, ...rest);
+    } as typeof HTMLCanvasElement.prototype.getContext;
+  });
+
+  await page.goto('/');
+
+  // The whole game is still there: the menu mounts, keys navigate it, and a run starts. Only the
+  // picture is missing, which is exactly what "renderer-less but playable" has to mean.
+  await expect(page.locator('#ui .ui-menu-item').first()).toBeVisible({ timeout: 5000 });
+  await page.keyboard.press('Enter');
+  await expect
+    .poll(() => page.evaluate(() => (window as Window & { __scene?: { id: string } }).__scene?.id), {
+      timeout: 5000,
+    })
+    .toBe('Playing');
+  await expect(page.locator('#hud')).toContainText('CITY INTEGRITY');
+
+  await page.waitForTimeout(250); // the fixed-timestep loop keeps running renderer-less
+  expect(errors).toEqual([]);
+});
+
+test('the UI layer is keyboard-navigable and never swallows aim (area 10, §8.6)', async ({
+  page,
+}) => {
+  await page.goto('/');
+
+  const items = page.locator('#ui .ui-menu-item');
+  await expect(items.first()).toBeVisible({ timeout: 5000 });
+
+  // One navigation model: the keyboard moves the selection, and the DOM reports it.
+  await expect(items.nth(0)).toHaveAttribute('aria-selected', 'true');
+  await page.keyboard.press('ArrowDown');
+  await expect(items.nth(1)).toHaveAttribute('aria-selected', 'true');
+  await expect(items.nth(0)).toHaveAttribute('aria-selected', 'false');
+  await page.keyboard.press('ArrowUp');
+  await expect(items.nth(0)).toHaveAttribute('aria-selected', 'true');
+
+  // The menu is modal, so its scrim deliberately takes pointer events. Once a run starts, the UI
+  // layer is decoration over a live world: a press in the sky must reach the canvas, or the player
+  // cannot aim. Asserted by hit-testing the layer rather than by trusting the CSS.
+  await items.nth(0).click();
+  await expect
+    .poll(() => page.evaluate(() => (window as Window & { __scene?: { id: string } }).__scene?.id), {
+      timeout: 5000,
+    })
+    .toBe('Playing');
+
+  const hitsCanvas = await page.evaluate(() => {
+    const el = document.elementFromPoint(window.innerWidth / 2, window.innerHeight * 0.25);
+    return el?.id ?? '';
+  });
+  expect(hitsCanvas).toBe('game3d');
 });

@@ -250,6 +250,10 @@ leaving the roof.
 - **`largeHudText`** scales the type scale up without breaking layout (the fluid
   scale and Grid layout absorb it).
 - **Aim is never swallowed.** Non-interactive UI is click-through; this is tested.
+- **A scrim is modal only while it is settled.** A screen that is still fading in, or fading out after
+  the run has already begun, drops its pointer events — otherwise the exit transition eats the first
+  press the player aims with. The rule is written as an explicit `:not()` on the transition states so
+  that reordering the stylesheet cannot resurrect it.
 - Respect `prefers-reduced-motion` as the default for `reducedMotion` when the player
   has expressed no preference.
 

@@ -158,15 +158,20 @@ test"), across **Chromium, WebKit (Safari engine), Firefox, and an emulated iPho
 
 1. Boots to MainMenu without console errors on every engine — **including engines with
    WebGL disabled**, where the no-op view path must stay silent and the DOM UI usable.
+   *(Covered: the GL-denied case patches `getContext` before app code runs, then starts a
+   run and reads the HUD, proving the sim is playable renderer-less and says nothing.)*
 2. Starts a run; a tap/click in the sky aims + fires and destroys a drone (covers the
-   §4 control scheme and `pointercancel` → cease-fire).
-3. Audio context reaches `running` after the first gesture (§5).
+   §4 control scheme and `pointercancel` → cease-fire). The closed-loop aim smoke is bounded
+   by wall clock rather than iteration count, so parallel load cannot fail a genuine pass.
+3. Audio context reaches `running` after the first gesture (§5). That gesture is a **menu
+   button**, not the canvas: the menu is modal, so unlock must not depend on reaching the world.
 4. `localStorage` round-trips, and the in-memory fallback path works when storage
    throws (§6).
 5. Mobile-viewport run holds the §7 frame-time budget under CPU throttling.
 6. The DOM UI is present and navigable: `#ui` mounts, keyboard navigation moves the
    menu selection, and interactive panels receive pointer events while the rest of the
-   layer stays click-through.
+   layer stays click-through. *(Covered: `aria-selected` follows the arrow keys, and a
+   hit test in the sky mid-run must land on `#game3d`.)*
 
 **No screenshot snapshots of the 3D scene.** A WebGL frame is not reproducible across
 engines, drivers, or GPUs; pinning one would be a flaky gate that teaches agents to
