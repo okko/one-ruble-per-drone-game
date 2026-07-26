@@ -20,7 +20,7 @@
  * (tests / the cross-browser smoke's `__combat` hook) keeps running without a renderer.
  */
 import * as THREE from 'three';
-import { WORLD } from './theme';
+import { colorOf, mixInto } from './theme';
 import type { WorldColorKey } from './theme';
 import { daylightAt } from '../../core/difficulty';
 import type { Content } from '../../content/loader';
@@ -51,6 +51,36 @@ import {
 } from './mapping';
 import { createCameraDirector, type CameraState } from './camera-director';
 import { createSoldier, SOLDIER_H, soldierPoseFrom } from './soldier';
+import { rigFor } from './lighting';
+import {
+  createTierGovernor,
+  isSoftwareRenderer,
+  pickTier,
+  pixelRatioFor,
+  policyFor,
+  type Tier,
+  type TierPolicy,
+} from './quality';
+// Type-only, so `verbatimModuleSyntax` erases it and the addons stay out of the main bundle; the
+// implementation arrives via the dynamic `import('./post')` in `buildChain`.
+import type { PostChain } from './post';
+/** Boot-time presentation options. Accessibility is read once: the settings screen is not live yet. */
+export interface ThreeViewOptions {
+  /** Kills the whole post chain, bloom included (docs/areas/11-art-visual-style.md §3.6). */
+  reducedFlash?: boolean | undefined;
+}
+
+/** A read-only mirror of what the GPU is being asked to do, for the compatibility gate to assert. */
+export interface RenderStats {
+  tier: Tier;
+  /** True when the EffectComposer is in use rather than a direct render. */
+  composited: boolean;
+  drawCalls: number;
+  triangles: number;
+  geometries: number;
+  textures: number;
+  programs: number;
+}
 
 export interface ThreeView {
   /** Resize the renderer to the CSS viewport (rendered at the device's native pixel ratio). */
@@ -66,11 +96,9 @@ export interface ThreeView {
   setCameraState(state: CameraState): void;
   /** Begin the opening fly-up (ground floor → rooftop post); called when a run starts. */
   startIntro(): void;
+  /** What the renderer is currently spending. Drives the bounded-draw-call gate (compatibility §7). */
+  stats(): RenderStats;
   dispose(): void;
-}
-
-function col(key: WorldColorKey): THREE.Color {
-  return new THREE.Color(WORLD[key]);
 }
 
 // A renderer-less stand-in used when WebGL is unavailable (headless/unsupported engines, e.g. CI
@@ -83,6 +111,15 @@ function noopView(): ThreeView {
     render() {},
     setCameraState() {},
     startIntro() {},
+    stats: () => ({
+      tier: 'low',
+      composited: false,
+      drawCalls: 0,
+      triangles: 0,
+      geometries: 0,
+      textures: 0,
+      programs: 0,
+    }),
     dispose() {},
   };
 }
@@ -92,7 +129,11 @@ interface SkylineTower {
   slabs: THREE.Mesh[]; // bottom → top; the top `floor(cut)` are hidden
 }
 
-export function createThreeView(canvas: HTMLCanvasElement, content: Content): ThreeView {
+export function createThreeView(
+  canvas: HTMLCanvasElement,
+  content: Content,
+  options: ThreeViewOptions = {},
+): ThreeView {
   // Acquire the WebGL2 context ourselves so we can bail out SILENTLY when it's unavailable. Letting
   // THREE.WebGLRenderer create it would log console.error (and fire webglcontextcreationerror) BEFORE
   // it throws — which trips the strict no-console-error cross-browser smokes on headless engines that
@@ -113,7 +154,53 @@ export function createThreeView(canvas: HTMLCanvasElement, content: Content): Th
   } catch {
     return noopView(); // GL present but renderer init failed — keep the sim running renderer-less
   }
-  renderer.setPixelRatio(Math.min(typeof window !== 'undefined' ? window.devicePixelRatio : 1, 3));
+
+  // ---- Colour pipeline ----------------------------------------------------------------------
+  // Lighting maths happens in linear space and is converted to sRGB exactly once, on the way out
+  // (docs/areas/11-art-visual-style.md §3.6). ACES gives the highlight rolloff that lets a muzzle
+  // flash or a lit window go genuinely bright without tearing a white hole in the frame — the "not
+  // photoreal, but not flat either" look §3.1 asks for. Exposure is then the single dial that makes
+  // night feel like night (§3.5: "exposure, not paint").
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1;
+
+  // ---- Quality tier -------------------------------------------------------------------------
+  // Guessed once from what the device admits about itself, then corrected downward from frames we
+  // actually observe. "Tier down, don't drop frames" (docs/compatibility.md §7) — the fixed-timestep
+  // sim is never the thing that gives.
+  const nav: Navigator | undefined = typeof navigator !== 'undefined' ? navigator : undefined;
+  const dpr = typeof window !== 'undefined' ? (window.devicePixelRatio ?? 1) : 1;
+  // The unmasked renderer string where the extension exists, the plain one otherwise. Both are
+  // wrapped because a locked-down engine can throw on either.
+  let rendererName: string | null = null;
+  try {
+    const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+    rendererName = String(
+      (dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : null) ?? gl.getParameter(gl.RENDERER) ?? '',
+    );
+  } catch {
+    rendererName = null;
+  }
+  let tier = pickTier({
+    mobile: /Android|iPhone|iPad|iPod/i.test(nav?.userAgent ?? '') || (nav?.maxTouchPoints ?? 0) > 1,
+    softwareRenderer: isSoftwareRenderer(rendererName),
+    cores: nav?.hardwareConcurrency ?? 0,
+    // `deviceMemory` is Chromium-only and not in lib.dom; absent means "wouldn't say", not "zero".
+    memoryGb: (nav as { deviceMemory?: number } | undefined)?.deviceMemory ?? 0,
+    maxTextureSize: gl.getParameter(gl.MAX_TEXTURE_SIZE) as number,
+  });
+  const reducedFlash = options.reducedFlash === true;
+  let policy: TierPolicy = policyFor(tier, { reducedFlash });
+  const governor = createTierGovernor(tier);
+  renderer.setPixelRatio(pixelRatioFor(tier, dpr));
+
+  // ---- Shadows ------------------------------------------------------------------------------
+  // Soft, and deliberately CHEAP: the shadow camera below covers the rooftop post alone, so the map's
+  // whole resolution is spent on the one place the player is looking. The skyline is lit but never
+  // shadowed — at that distance a shadow reads as noise, and paying for it would cost the tier.
+  renderer.shadowMap.enabled = policy.shadows;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(60, 16 / 9, 0.1, 400);
@@ -122,19 +209,42 @@ export function createThreeView(canvas: HTMLCanvasElement, content: Content): Th
   const aimCamera = new THREE.PerspectiveCamera(60, 16 / 9, 0.1, 400);
 
   // ---- Lights + sky -------------------------------------------------------------------------
-  const hemi = new THREE.HemisphereLight(0xffffff, 0x223044, 1);
+  // Hemisphere fill + a directional key: §3.5 is explicit that ambient-only lighting flattens the
+  // towers and is not acceptable. `lighting.rigFor` owns every number these are driven by.
+  const hemi = new THREE.HemisphereLight(colorOf('cloud'), colorOf('bounce'), 1);
   scene.add(hemi);
-  const sun = new THREE.DirectionalLight(0xffffff, 1.1);
+  const sun = new THREE.DirectionalLight(colorOf('sunNoon'), 1.1);
   sun.position.set(-8, 30, 14);
   scene.add(sun);
 
+  if (policy.shadows) {
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(policy.shadowMapSize, policy.shadowMapSize);
+    // Bounded to the rooftop post and nothing else. Sized off the tower footprint and the soldier's
+    // own height rather than assumed metres — a man here is SOLDIER_H = 0.58 units, so a bias tuned
+    // for a human-scale scene would be an order of magnitude wrong and would peter-pan his feet.
+    const span = Math.max(TOWER_W, TOWER_D) * 0.75;
+    const cam = sun.shadow.camera;
+    cam.left = -span;
+    cam.right = span;
+    cam.top = span;
+    cam.bottom = -span;
+    cam.near = 1;
+    cam.far = 80;
+    cam.updateProjectionMatrix();
+    sun.target.position.set(TOWER_X, ROOF_DECK_TOP_Y, TOWER_Z);
+    scene.add(sun.target);
+    sun.shadow.bias = -0.0004;
+    sun.shadow.normalBias = SOLDIER_H * 0.04;
+  }
+
   const skyGeo = new THREE.SphereGeometry(220, 24, 16);
-  const skyMat = new THREE.MeshBasicMaterial({ color: col('skyDayTop'), side: THREE.BackSide, fog: false });
+  const skyMat = new THREE.MeshBasicMaterial({ color: colorOf('skyDayTop'), side: THREE.BackSide, fog: false });
   scene.add(new THREE.Mesh(skyGeo, skyMat));
 
   const sunSprite = new THREE.Mesh(
     new THREE.CircleGeometry(7, 24),
-    new THREE.MeshBasicMaterial({ color: col('flash') }),
+    new THREE.MeshBasicMaterial({ color: colorOf('flash') }),
   );
   sunSprite.position.set(40, ROOF_Y + 26, -120);
   scene.add(sunSprite);
@@ -143,7 +253,7 @@ export function createThreeView(canvas: HTMLCanvasElement, content: Content): Th
   // tower share it, so nothing sits underground (drones/the gun still map ABOVE it via ay()).
   const ground = new THREE.Mesh(
     new THREE.PlaneGeometry(800, 400),
-    new THREE.MeshStandardMaterial({ color: col('ink') }),
+    new THREE.MeshStandardMaterial({ color: colorOf('ink') }),
   );
   ground.rotation.x = -Math.PI / 2;
   ground.position.set(0, GROUND_Y, -20);
@@ -161,7 +271,7 @@ export function createThreeView(canvas: HTMLCanvasElement, content: Content): Th
     const slabH = (roofY - GROUND_Y) / b.stories;
     const w = b.width * AS;
     const slabs: THREE.Mesh[] = [];
-    const body = col(b.id % 2 === 0 ? 'concrete' : 'concreteDk');
+    const body = colorOf(b.id % 2 === 0 ? 'concrete' : 'concreteDk');
     for (let s = 0; s < b.stories; s++) {
       const slab = new THREE.Mesh(
         new THREE.BoxGeometry(w, slabH * 0.96, w * 0.7),
@@ -171,7 +281,11 @@ export function createThreeView(canvas: HTMLCanvasElement, content: Content): Th
       // Lit windows on the camera-facing side (emissive so night reads).
       const win = new THREE.Mesh(
         windowGeo,
-        new THREE.MeshStandardMaterial({ color: col('windowLit'), emissive: col('windowLit'), emissiveIntensity: 0.8 }),
+        new THREE.MeshStandardMaterial({
+          color: colorOf('windowLit'),
+          emissive: colorOf('windowLit'),
+          emissiveIntensity: 0.8,
+        }),
       );
       win.position.set(0, 0, w * 0.36);
       win.scale.set(w * 0.5, slabH * 0.5, 1);
@@ -192,7 +306,7 @@ export function createThreeView(canvas: HTMLCanvasElement, content: Content): Th
   // open — not inside the building. (ROOF_Y == 32·STORY_H, so the base lands exactly on the ground.)
   const towerX = TOWER_X;
   // Back + side walls (front omitted → the cut-away reveals the floors).
-  const wallMat = new THREE.MeshStandardMaterial({ color: col('concreteDk'), flatShading: true });
+  const wallMat = new THREE.MeshStandardMaterial({ color: colorOf('concreteDk'), flatShading: true });
   const back = new THREE.Mesh(new THREE.BoxGeometry(TW, ROOF_Y, 0.2), wallMat);
   back.position.set(towerX, GROUND_Y + ROOF_Y / 2, TOWER_Z - TD / 2);
   towerGroup.add(back);
@@ -209,14 +323,18 @@ export function createThreeView(canvas: HTMLCanvasElement, content: Content): Th
     const y = floorSlabY(f);
     const deck = new THREE.Mesh(
       new THREE.BoxGeometry(TW, 0.12, TD),
-      new THREE.MeshStandardMaterial({ color: col('shadow'), flatShading: true }),
+      new THREE.MeshStandardMaterial({ color: colorOf('shadow'), flatShading: true }),
     );
     deck.position.set(towerX, y, TOWER_Z);
     towerGroup.add(deck);
     // A dim back-glow panel for the floor (brightened when this floor is being visited).
     const glow = new THREE.Mesh(
       new THREE.PlaneGeometry(TW * 0.92, STORY_H * 0.86),
-      new THREE.MeshStandardMaterial({ color: col('windowLit'), emissive: col('windowLit'), emissiveIntensity: 0.12 }),
+      new THREE.MeshStandardMaterial({
+        color: colorOf('windowLit'),
+        emissive: colorOf('windowLit'),
+        emissiveIntensity: 0.12,
+      }),
     );
     glow.position.set(towerX, y + STORY_H / 2, TOWER_Z - TD / 2 + 0.12);
     towerGroup.add(glow);
@@ -229,7 +347,7 @@ export function createThreeView(canvas: HTMLCanvasElement, content: Content): Th
       const body = SOLDIER_H - 2 * r;
       const fig = new THREE.Mesh(
         new THREE.CapsuleGeometry(r, body, 4, 8),
-        new THREE.MeshStandardMaterial({ color: col('skin'), flatShading: true }),
+        new THREE.MeshStandardMaterial({ color: colorOf('skin'), flatShading: true }),
       );
       fig.position.set(towerX - TW * 0.28, y + SOLDIER_H / 2, TOWER_Z + TD * 0.18);
       towerGroup.add(fig);
@@ -240,13 +358,14 @@ export function createThreeView(canvas: HTMLCanvasElement, content: Content): Th
   // top face is ROOF_DECK_TOP_Y — the surface everything on the roof is placed against.
   const roofDeck = new THREE.Mesh(
     new THREE.BoxGeometry(TW, ROOF_DECK_THICKNESS, TD),
-    new THREE.MeshStandardMaterial({ color: col('concrete'), flatShading: true }),
+    new THREE.MeshStandardMaterial({ color: colorOf('concrete'), flatShading: true }),
   );
   roofDeck.position.set(towerX, ROOF_DECK_Y, TOWER_Z);
   towerGroup.add(roofDeck);
-  const parapetMat = new THREE.MeshStandardMaterial({ color: col('uniformDk'), flatShading: true });
+  const parapetMat = new THREE.MeshStandardMaterial({ color: colorOf('uniformDk'), flatShading: true });
   // Waist-high on the soldier. Anything taller hides the man the game is about.
   const PARAPET_H = SOLDIER_H * 0.55;
+  const parapetRails: THREE.Mesh[] = [];
   for (const [dx, dz, w, d] of [
     [0, -TD / 2, TW, 0.25],
     [-TW / 2, 0, 0.25, TD],
@@ -255,6 +374,7 @@ export function createThreeView(canvas: HTMLCanvasElement, content: Content): Th
     const rail = new THREE.Mesh(new THREE.BoxGeometry(w, PARAPET_H, d), parapetMat);
     rail.position.set(towerX + dx, ROOF_DECK_TOP_Y + PARAPET_H / 2, TOWER_Z + dz);
     towerGroup.add(rail);
+    parapetRails.push(rail);
   }
 
   // ---- The gun + soldier ON the roof deck (storey 33) -----------------------------------------
@@ -292,7 +412,7 @@ export function createThreeView(canvas: HTMLCanvasElement, content: Content): Th
 
   const barrel = new THREE.Mesh(
     new THREE.CylinderGeometry(BARREL_LEN * 0.045, BARREL_LEN * 0.045, BARREL_LEN, 8),
-    new THREE.MeshStandardMaterial({ color: col('gunmetal'), flatShading: true }),
+    new THREE.MeshStandardMaterial({ color: colorOf('gunmetal'), flatShading: true }),
   );
   barrel.geometry.translate(0, BARREL_LEN / 2, 0); // pivot at one end
   const barrelYaw = new THREE.Group();
@@ -300,23 +420,39 @@ export function createThreeView(canvas: HTMLCanvasElement, content: Content): Th
   gunPivot.add(barrelYaw);
   const muzzle = new THREE.Mesh(
     new THREE.SphereGeometry(BARREL_LEN * 0.13, 8, 6),
-    new THREE.MeshBasicMaterial({ color: col('flashHot') }),
+    new THREE.MeshBasicMaterial({ color: colorOf('flashHot') }),
   );
   muzzle.visible = false;
   barrelYaw.add(muzzle);
   // A stubby mount under the pivot, so the gun stands on the deck rather than floating at his chest.
   const mount = new THREE.Mesh(
     new THREE.CylinderGeometry(SOLDIER_H * 0.1, SOLDIER_H * 0.16, GUN_PIVOT_H, 6),
-    new THREE.MeshStandardMaterial({ color: col('gunmetalDk'), flatShading: true }),
+    new THREE.MeshStandardMaterial({ color: colorOf('gunmetalDk'), flatShading: true }),
   );
   mount.position.y = -GUN_PIVOT_H / 2;
   gunPivot.add(mount);
+
+  // ---- Who casts, and onto what -------------------------------------------------------------
+  // The rooftop post is the ONLY shadow-casting region, matching the shadow camera set up above.
+  // Contact shadows here are what stop the soldier and the gun from looking pasted onto the deck; a
+  // shadow from a tower two kilometres away, at this map resolution, would be a smear.
+  roofDeck.receiveShadow = true;
+  for (const rail of parapetRails) {
+    rail.castShadow = true;
+    rail.receiveShadow = true;
+  }
+  gunPivot.traverse((o) => {
+    if (o instanceof THREE.Mesh) o.castShadow = true;
+  });
+  soldier.group.traverse((o) => {
+    if (o instanceof THREE.Mesh) o.castShadow = true;
+  });
 
   // ---- Pools: drones + projectiles ----------------------------------------------------------
   const droneGeo = new THREE.IcosahedronGeometry(0.55, 0);
   const dronePool: THREE.Mesh[] = [];
   const projGeo = new THREE.SphereGeometry(0.12, 6, 4);
-  const projMat = new THREE.MeshBasicMaterial({ color: col('flash') });
+  const projMat = new THREE.MeshBasicMaterial({ color: colorOf('flash') });
   const projPool: THREE.Mesh[] = [];
 
   function droneColorKey(kind: string): WorldColorKey {
@@ -353,6 +489,73 @@ export function createThreeView(canvas: HTMLCanvasElement, content: Content): Th
   let cssW = 1;
   let cssH = 1;
 
+  // ---- The post chain, and the tier it belongs to --------------------------------------------
+  // The chain starts as a direct render and is UPGRADED once its chunk arrives. `./post` pulls in the
+  // post-processing addons, which are bulky, so it is loaded on demand: a phone on the low tier — or
+  // anyone who has asked for `reducedFlash` — never downloads a chain it would not have run.
+  // Presentation is allowed to arrive late; it is never allowed to hold up a frame.
+  let chain: PostChain = directChain();
+  /** Guards against a slow import landing after a tier change or a dispose has superseded it. */
+  let chainToken = 0;
+
+  function directChain(): PostChain {
+    return {
+      composited: false,
+      render: () => renderer.render(scene, camera),
+      setSize: () => {},
+      dispose: () => {},
+    };
+  }
+
+  function buildChain(): void {
+    const token = ++chainToken;
+    chain.dispose();
+    chain = directChain();
+    if (!policy.post) return;
+    void import('./post')
+      .then(({ createPostChain }) => {
+        if (token !== chainToken) return; // superseded while in flight
+        chain = createPostChain(renderer, scene, camera, policy, {
+          width: cssW,
+          height: cssH,
+          pixelRatio: renderer.getPixelRatio(),
+        });
+        chain.setSize(cssW, cssH, renderer.getPixelRatio());
+      })
+      .catch(() => {
+        // The picture is a nicety; the shift is not. A chunk that fails to load leaves the direct
+        // render in place and says nothing, because the boot smokes assert a silent console.
+        chainToken += 1;
+      });
+  }
+
+  /**
+   * Rebuild the render chain for a new tier. Called only when the governor demotes, which is rare
+   * and never per-frame — this throws away GPU resources and recompiles every shader in the scene.
+   */
+  function applyTier(next: Tier): void {
+    tier = next;
+    policy = policyFor(tier, { reducedFlash });
+    renderer.setPixelRatio(pixelRatioFor(tier, dpr));
+
+    if (renderer.shadowMap.enabled !== policy.shadows) {
+      renderer.shadowMap.enabled = policy.shadows;
+      sun.castShadow = policy.shadows;
+      // Toggling shadows changes the #defines every lit material compiles with, so three needs to be
+      // told the programs are stale. Without this the scene keeps rendering with the old ones and the
+      // shadows either linger or never appear.
+      scene.traverse((o) => {
+        if (!(o instanceof THREE.Mesh)) return;
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        for (const m of mats) m.needsUpdate = true;
+      });
+    }
+
+    buildChain();
+  }
+
+  buildChain();
+
   // The opening crane holds at the `intro` pose, then hands off to `shooting`.
   const INTRO_DUR = 2.6;
   let introT = 1; // 1 = finished; startIntro() resets to 0
@@ -379,6 +582,8 @@ export function createThreeView(canvas: HTMLCanvasElement, content: Content): Th
 
   let lastT = 0;
   let muzzleTimer = 0;
+  /** Wall clock at the previous frame, for the tier governor. 0 until the first frame has landed. */
+  let lastFrameAt = 0;
 
   // Where the soldier is standing right now, eased between the roof post and the flat he is visiting.
   // He is NEVER hidden: going indoors moves him, it does not delete him
@@ -418,18 +623,28 @@ export function createThreeView(canvas: HTMLCanvasElement, content: Content): Th
   }
 
   function render(gs: GameState, _alpha: number, vs: PlayingViewState): void {
+    // Frame COST is measured as the interval between frames rather than the time spent inside this
+    // function: rAF backpressure means the interval includes the GPU actually finishing, which is the
+    // thing that stutters. Time spent here only measures how fast we hand work over.
+    const wall = performance.now();
+    if (lastFrameAt > 0 && governor.sample(wall - lastFrameAt)) applyTier(governor.tier);
+    lastFrameAt = wall;
+
     const c = gs.combat;
     const now = gs.time.shiftSeconds;
     const dt = Math.max(0, Math.min(0.1, now - lastT));
     lastT = now;
 
-    // Day / night.
+    // Day / night. `lighting.rigFor` owns every constant; this just applies them.
     const daylight = daylightAt(now, content.combat.difficulty);
-    skyMat.color.copy(col('skyDayTop')).lerp(col('skyNightTop'), 1 - daylight);
-    hemi.intensity = 0.35 + daylight * 0.75;
-    sun.intensity = 0.3 + daylight * 0.9;
-    sunSprite.material.color.copy(daylight > 0.4 ? col('flash') : col('cloud'));
-    const winGlow = 0.25 + (1 - daylight) * 1.1;
+    const rig = rigFor(daylight);
+    mixInto(skyMat.color, 'skyDayTop', 'skyNightTop', 1 - daylight);
+    hemi.intensity = rig.hemisphere;
+    sun.intensity = rig.key;
+    mixInto(sun.color, rig.keyColor.from, rig.keyColor.to, rig.keyColor.t);
+    renderer.toneMappingExposure = rig.exposure;
+    sunSprite.material.color.copy(colorOf(daylight > 0.4 ? 'flash' : 'cloud'));
+    const winGlow = rig.windowGlow;
 
     // Skyline damage: hide the top floor(cut) slabs of each tower; dim the highest survivor.
     for (const t of towers) {
@@ -460,7 +675,7 @@ export function createThreeView(canvas: HTMLCanvasElement, content: Content): Th
       m.rotation.x += 0.05;
       m.rotation.y += 0.07;
       if (m.material instanceof THREE.MeshStandardMaterial) {
-        m.material.color.copy(col(d.colorTag !== undefined ? 'accentPink' : droneColorKey(d.kind)));
+        m.material.color.copy(colorOf(d.colorTag !== undefined ? 'accentPink' : droneColorKey(d.kind)));
       }
     }
     for (let i = c.drones.length; i < dronePool.length; i++) {
@@ -523,13 +738,14 @@ export function createThreeView(canvas: HTMLCanvasElement, content: Content): Th
 
     updateSoldier(gs, vs, dt, now);
     updateCamera(vs, dt, now);
-    renderer.render(scene, camera);
+    chain.render();
   }
 
   function resize(w: number, h: number): void {
     cssW = Math.max(1, w);
     cssH = Math.max(1, h);
     renderer.setSize(cssW, cssH, false);
+    chain.setSize(cssW, cssH, renderer.getPixelRatio());
     const aspect = cssW / cssH;
     camera.aspect = aspect;
     camera.updateProjectionMatrix();
@@ -556,8 +772,24 @@ export function createThreeView(canvas: HTMLCanvasElement, content: Content): Th
       introT = 0;
       director.setState('intro', { immediate: true });
     },
+    stats(): RenderStats {
+      const info = renderer.info;
+      return {
+        tier,
+        composited: chain.composited,
+        drawCalls: info.render.calls,
+        triangles: info.render.triangles,
+        geometries: info.memory.geometries,
+        textures: info.memory.textures,
+        programs: info.programs?.length ?? 0,
+      };
+    },
     dispose(): void {
+      // Invalidate any post chunk still in flight, so it cannot build a composer over a disposed
+      // renderer after we have gone.
+      chainToken += 1;
       soldier.dispose();
+      chain.dispose();
       renderer.dispose();
       scene.traverse((o) => {
         if (o instanceof THREE.Mesh) {

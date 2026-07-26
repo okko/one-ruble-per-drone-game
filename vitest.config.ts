@@ -34,6 +34,8 @@ export default defineConfig({
         'src/render/three/camera-director.ts',
         'src/render/three/soldier.ts',
         'src/render/three/theme.ts',
+        'src/render/three/quality.ts',
+        'src/render/three/lighting.ts',
       ],
       // game-state.ts is pure interfaces (no runtime); test-support helpers are not product logic.
       exclude: ['**/*.test.ts', '**/__fixtures__/**', 'src/test-support/**'],

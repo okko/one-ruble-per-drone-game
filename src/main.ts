@@ -17,7 +17,7 @@ import { createWebAudioBackend, type AudioSettings } from './audio/backend';
 import { createAudioEngine } from './audio/engine';
 import { createHudEconomy } from './ui/hud/economy-adapter';
 import type { SettingsView } from './ui/hud/types';
-import { createThreeView, type ThreeView } from './render/three/view';
+import { createThreeView, type RenderStats, type ThreeView } from './render/three/view';
 import { createUiShell } from './ui/shell/ui-shell';
 import { createGameOverlay } from './ui/game-overlay';
 import { createInput } from './input/input';
@@ -42,6 +42,9 @@ declare global {
     __audio?: { readonly state: string };
     // Mirrors the active scene id for the shell smoke (tests/e2e/menu). Harmless in prod.
     __scene?: { readonly id: string };
+    // Mirrors what the GPU is being asked to do, so the e2e can machine-check the bounded-draw-call
+    // and tiering rules in docs/compatibility.md §7. Harmless in prod; read-only over renderer.info.
+    __render?: { readonly stats: RenderStats | null };
   }
 }
 
@@ -85,7 +88,17 @@ function main(): void {
   // nothing 3D is on screen. `createThreeView` probes for WebGL2 silently and returns a working
   // no-op view when there is no context, which is what keeps the strict no-console-error smokes
   // clean on engines without GL.
-  const view: ThreeView | undefined = canvas3d ? createThreeView(canvas3d, content) : undefined;
+  //
+  // `reducedFlash` is read once, here: it decides whether the post chain (bloom above all) is built
+  // at all, and the settings screen that would let it change mid-run is not live yet.
+  const view: ThreeView | undefined = canvas3d
+    ? createThreeView(canvas3d, content, { reducedFlash: settings.accessibility.reducedFlash })
+    : undefined;
+  window.__render = {
+    get stats(): RenderStats | null {
+      return view ? view.stats() : null;
+    },
+  };
   const shell = uiRoot ? createUiShell(uiRoot) : undefined;
   const overlay = hudHost ? createGameOverlay(hudHost, content) : undefined;
 

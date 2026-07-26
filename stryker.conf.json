@@ -13,6 +13,8 @@
     "src/render/three/mapping.ts",
     "src/render/three/camera-director.ts",
     "src/render/three/soldier.ts",
+    "src/render/three/quality.ts",
+    "src/render/three/lighting.ts",
     "!src/**/*.test.ts",
     "!src/test-support/**/*.ts"
   ],

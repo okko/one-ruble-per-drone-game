@@ -5,11 +5,12 @@
  * This is the WORLD only. Everything in the DOM — screens and HUD alike — takes its colours from
  * `src/ui/styles/tokens.css`, so the two never fight over one constant.
  *
- * Budget: ≤ 32 unique hex values (enforced by theme.test.ts). The §3.2 table lists ~39 keys, so
- * several near-duplicate keys deliberately share a hex value (the doc's suggested approach, e.g.
- * `windowLit` reuses `explYellow`). Keys stay distinct so call sites read meaningfully; only the
- * hex values dedupe.
+ * Values are authored in sRGB hex and converted once, on first use, by `colorOf`. Mood comes from
+ * light intensity and tone mapping, never from pre-darkened paint (§3.2): there is no "night" variant
+ * of a material colour in here, only a night *sky* and a warmer *sun*.
  */
+import * as THREE from 'three';
+
 export const WORLD = Object.freeze({
   // Line/shadow
   ink: '#1a1c2c',
@@ -63,6 +64,44 @@ export const WORLD = Object.freeze({
   meterGood: '#3ddc84',
   meterWarn: '#ff9f1c', // shares `flashHot`
   meterCrit: '#ff3b3b',
+  // Light rig. The key light's colour temperature swings across the day (§3.5); the hemisphere's
+  // lower half stands in for bounce off the city below.
+  sunNoon: '#fff4e0',
+  sunLow: '#ffb367',
+  moonlight: '#9fb6ff',
+  bounce: '#223044',
 } as const);
 
 export type WorldColorKey = keyof typeof WORLD;
+
+// One THREE.Color per key, built on first use and shared thereafter. The render loop reads colours
+// every frame, and `docs/compatibility.md` §7 is explicit that allocating a `new THREE.Color()` per
+// frame is a regression — so the cache is the only supported way to get one.
+const cache = new Map<WorldColorKey, THREE.Color>();
+
+/**
+ * The shared colour for a key. **Treat the result as immutable**: it is the same object on every
+ * call, so mutating it repaints every material that ever read that key. To derive a colour, copy it
+ * into your own instance, or use `mixInto`.
+ */
+export function colorOf(key: WorldColorKey): THREE.Color {
+  let c = cache.get(key);
+  if (!c) {
+    c = new THREE.Color(WORLD[key]);
+    cache.set(key, c);
+  }
+  return c;
+}
+
+/**
+ * Write the blend of two theme colours into `target`, allocating nothing. `t = 0` is `a`, `t = 1`
+ * is `b`. This is the day/night ramp's workhorse.
+ */
+export function mixInto(
+  target: THREE.Color,
+  a: WorldColorKey,
+  b: WorldColorKey,
+  t: number,
+): THREE.Color {
+  return target.copy(colorOf(a)).lerp(colorOf(b), t);
+}
