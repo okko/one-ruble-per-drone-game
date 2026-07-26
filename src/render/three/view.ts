@@ -408,21 +408,15 @@ export function createThreeView(
   /** How far back from the gun's pivot he stands — clear of the ammunition can, hands at the grips. */
   const SOLDIER_SETBACK = SOLDIER_H * 0.8;
   /**
-   * How far RIGHT of the gun's pivot he stands, so that he reads as being behind the gun.
+   * How far right of the gun's pivot he stands.
    *
-   * Standing him on the gun's own x does not do it. He is nearer the lens than the mount and the
-   * shooting eye sits right of the tower's centre line, so parallax slides him to the LEFT of the
-   * weapon he is meant to be firing and he reads as a bystander beside it. He belongs on the ray from
-   * the eye through the pivot, sampled at his own depth.
-   *
-   * Everything in that ray is fixed, so this is one number rather than a solve. With the eye at
-   * (1.1, y, TOWER_Z + 3) and the pivot at (0, y, TOWER_Z), the ray has closed 1 - SETBACK/3 of the
-   * way to the pivot by the time it reaches him, leaving x = 1.1 * SETBACK / 3 = 0.2933 of his own
-   * height. If the shooting pose in ./camera-director ever moves off the tower's centre line by a
-   * different amount, this is the number that moves with it.
+   * Not zero, because the belt and the ammunition can hang off the gun's left and he would be
+   * standing in them; he takes the free side, as a loader-less gunner does. Small, because past
+   * about a fifth of his width he stops being the man behind the gun and starts being a man next to
+   * it. Fixed rather than solved: the mount does not move and neither does he.
    */
-  const SOLDIER_OFFSET_X = SOLDIER_H * 0.2933;
-  /** Where he stands on the roof: behind the gun as seen down the shooting camera, on the deck. */
+  const SOLDIER_OFFSET_X = SOLDIER_H * 0.18;
+  /** Where he stands on the roof: behind the gun, on the deck's top face. */
   const roofSpot = new THREE.Vector3(
     gunPivot.position.x + SOLDIER_OFFSET_X,
     ROOF_DECK_TOP_Y,

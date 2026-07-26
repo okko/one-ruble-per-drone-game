@@ -5,7 +5,17 @@ import type { CombatBalance } from '../../content/balance';
 import { DEFAULT_FLAGS } from '../incidents';
 import type { IncidentFlags } from '../../state/game-state';
 import { createCombatState } from './combat';
-import { updateGun, applyAimModifier, deriveAimModifier, normalizeAngle, approachAngle, setJam } from './gun';
+import {
+  updateGun,
+  applyAimModifier,
+  deriveAimModifier,
+  normalizeAngle,
+  approachAngle,
+  setJam,
+  clampAim,
+  AIM_LEFT_STOP,
+  AIM_RIGHT_STOP,
+} from './gun';
 import type { AimModifier, PlayerIntent } from './types';
 import type { MeterEffects } from '../meters';
 
@@ -46,6 +56,66 @@ describe('gun: angle helpers', () => {
     expect(approachAngle(0, 3, 0.1)).toBeCloseTo(0.1, 9); // step toward
     // shortest arc from 0.1 to -3.1 wraps the POSITIVE way (3.08 < 3.2 rad), so it increases
     expect(approachAngle(0.1, -3.1, 0.1)).toBeCloseTo(0.2, 9);
+  });
+});
+
+describe('gun: traverse stops (§3.4)', () => {
+  it('leaves every bearing above the roofline alone', () => {
+    for (const a of [AIM_LEFT_STOP, -2.5, -Math.PI / 2, -0.4, AIM_RIGHT_STOP]) {
+      expect(clampAim(a)).toBeCloseTo(a, 9);
+    }
+  });
+
+  it('pulls bearings below the roofline to the nearer stop, never through the floor', () => {
+    expect(clampAim(0.1)).toBe(AIM_RIGHT_STOP);
+    expect(clampAim(Math.PI / 2 - 0.01)).toBe(AIM_RIGHT_STOP);
+    expect(clampAim(Math.PI / 2 + 0.01)).toBe(AIM_LEFT_STOP);
+    expect(clampAim(3.0)).toBe(AIM_LEFT_STOP);
+    expect(clampAim(Math.PI)).toBe(AIM_LEFT_STOP); // hard left, reached from the far side
+  });
+
+  it('holds the barrel at a stop when the player keeps rotating past it', () => {
+    for (const [dir, stop] of [
+      [1, AIM_RIGHT_STOP],
+      [-1, AIM_LEFT_STOP],
+    ] as const) {
+      const { ctx, combat } = setup();
+      // Arena y counts downward, so a POSITIVE rotateDir sweeps toward the right-hand stop.
+      const spin: PlayerIntent = { aimTarget: null, rotateDir: dir, fireHeld: false };
+      for (let i = 0; i < 200; i += 1) updateGun(combat, 1 / 60, ctx, ZERO_MOD, flags(), spin, i / 60);
+      expect(combat.gun.angle).toBeCloseTo(stop, 6);
+      expect(combat.aim.effectiveAngle).toBeCloseTo(stop, 6);
+    }
+  });
+
+  it('crosses from one stop to the other over the top rather than under the deck', () => {
+    const { ctx, combat } = setup();
+    combat.gun.angle = AIM_RIGHT_STOP;
+    combat.aim.desiredAngle = AIM_RIGHT_STOP;
+    // Aim hard left: dead level with the pivot, on the far side. The two stops are exactly half a
+    // turn apart, which is where a shortest-arc slew is free to pick the way through the roof.
+    const left: PlayerIntent = {
+      aimTarget: { x: combat.gun.pivot.x - 100, y: combat.gun.pivot.y },
+      rotateDir: 0,
+      fireHeld: false,
+    };
+    let lowest = -Math.PI;
+    for (let i = 0; i < 200; i += 1) {
+      updateGun(combat, 1 / 60, ctx, ZERO_MOD, flags(), left, i / 60);
+      lowest = Math.max(lowest, Math.sin(combat.gun.angle)); // positive sine = below the roofline
+    }
+    expect(lowest).toBeLessThanOrEqual(1e-9);
+    expect(combat.gun.angle).toBeCloseTo(AIM_LEFT_STOP, 6);
+  });
+
+  it('does not let the sway dip a parked barrel below the roofline', () => {
+    const { ctx, combat } = setup();
+    const drunk: AimModifier = { ...ZERO_MOD, swayAmplitude: 0.4, swayFrequency: 1, drunkWobble: 0.3, drunkFrequency: 0.5 };
+    const spin: PlayerIntent = { aimTarget: null, rotateDir: 1, fireHeld: false };
+    for (let i = 0; i < 400; i += 1) {
+      updateGun(combat, 1 / 60, ctx, drunk, flags(), spin, i / 60);
+      expect(Math.sin(combat.aim.effectiveAngle)).toBeLessThanOrEqual(1e-9);
+    }
   });
 });
 
