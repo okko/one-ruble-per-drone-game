@@ -22,7 +22,7 @@
 import * as THREE from 'three';
 import { colorOf, mixInto } from './theme';
 import type { WorldColorKey } from './theme';
-import { daylightAt } from '../../core/difficulty';
+import { daylightAt, dayCycleAt } from '../../core/difficulty';
 import type { Content } from '../../content/loader';
 import type { GameState } from '../../state/game-state';
 import type { PlayingViewState } from '../../state/playing-view';
@@ -51,7 +51,8 @@ import {
 } from './mapping';
 import { createCameraDirector, type CameraState } from './camera-director';
 import { createSoldier, SOLDIER_H, soldierPoseFrom } from './soldier';
-import { rigFor } from './lighting';
+import { FOG_FAR, FOG_NEAR, rigFor, sunDirectionFor } from './lighting';
+import { createSky } from './sky';
 import {
   createTierGovernor,
   isSoftwareRenderer,
@@ -128,6 +129,15 @@ interface SkylineTower {
   buildingId: number;
   slabs: THREE.Mesh[]; // bottom → top; the top `floor(cut)` are hidden
 }
+
+/**
+ * How far the key light orbits from the rooftop post.
+ *
+ * A directional light has no position in the lighting maths — only a direction — but its position is
+ * what the shadow camera is built around, so it has to sit far enough out to contain the post and
+ * close enough in to keep the shadow map's depth range tight.
+ */
+const SUN_DISTANCE = 34;
 
 export function createThreeView(
   canvas: HTMLCanvasElement,
@@ -216,6 +226,9 @@ export function createThreeView(
   const sun = new THREE.DirectionalLight(colorOf('sunNoon'), 1.1);
   sun.position.set(-8, 30, 14);
   scene.add(sun);
+  // The key light orbits the rooftop at a fixed distance, so however far round the day has turned it
+  // is always the same distance inside the shadow camera's `far` plane. Reused every frame (§7).
+  const sunDir = new THREE.Vector3(0, 1, 0);
 
   if (policy.shadows) {
     sun.castShadow = true;
@@ -229,8 +242,10 @@ export function createThreeView(
     cam.right = span;
     cam.top = span;
     cam.bottom = -span;
+    // The light now orbits, so the frustum has to hold it at every bearing: `near` must clear the
+    // post at the closest approach and `far` must still reach it at the furthest.
     cam.near = 1;
-    cam.far = 80;
+    cam.far = SUN_DISTANCE * 2;
     cam.updateProjectionMatrix();
     sun.target.position.set(TOWER_X, ROOF_DECK_TOP_Y, TOWER_Z);
     scene.add(sun.target);
@@ -238,16 +253,10 @@ export function createThreeView(
     sun.shadow.normalBias = SOLDIER_H * 0.04;
   }
 
-  const skyGeo = new THREE.SphereGeometry(220, 24, 16);
-  const skyMat = new THREE.MeshBasicMaterial({ color: colorOf('skyDayTop'), side: THREE.BackSide, fog: false });
-  scene.add(new THREE.Mesh(skyGeo, skyMat));
-
-  const sunSprite = new THREE.Mesh(
-    new THREE.CircleGeometry(7, 24),
-    new THREE.MeshBasicMaterial({ color: colorOf('flash') }),
-  );
-  sunSprite.position.set(40, ROOF_Y + 26, -120);
-  scene.add(sunSprite);
+  const skyView = createSky(scene, renderer);
+  // Aerial perspective. Linear rather than exponential so the near limit is a number this file can
+  // state and `lighting.ts` can justify: the action plane must stay entirely out of it (§3.1).
+  scene.fog = new THREE.Fog(colorOf('skyDayLow').clone(), FOG_NEAR, FOG_FAR);
 
   // Ground: every tower stands on world Y = GROUND_Y (see ./mapping). The skyline + the soldier's
   // tower share it, so nothing sits underground (drones/the gun still map ABOVE it via ay()).
@@ -638,12 +647,22 @@ export function createThreeView(
     // Day / night. `lighting.rigFor` owns every constant; this just applies them.
     const daylight = daylightAt(now, content.combat.difficulty);
     const rig = rigFor(daylight);
-    mixInto(skyMat.color, 'skyDayTop', 'skyNightTop', 1 - daylight);
     hemi.intensity = rig.hemisphere;
     sun.intensity = rig.key;
     mixInto(sun.color, rig.keyColor.from, rig.keyColor.to, rig.keyColor.t);
     renderer.toneMappingExposure = rig.exposure;
-    sunSprite.material.color.copy(colorOf(daylight > 0.4 ? 'flash' : 'cloud'));
+
+    // The sun travels. Its bearing comes from the cycle rather than from `daylight`, which is a
+    // cosine and so cannot tell morning from afternoon; the light is placed relative to the rooftop
+    // so it stays inside the shadow camera's frustum however far round it has swung.
+    const dir = sunDirectionFor(dayCycleAt(now, content.combat.difficulty));
+    sunDir.set(dir.x, dir.y, dir.z);
+    sun.position
+      .set(TOWER_X, ROOF_DECK_TOP_Y, TOWER_Z)
+      .addScaledVector(sunDir, SUN_DISTANCE);
+
+    skyView.update(rig, sunDir, policy);
+    if (scene.fog) mixInto(scene.fog.color, rig.fogColor.from, rig.fogColor.to, rig.fogColor.t);
     const winGlow = rig.windowGlow;
 
     // Skyline damage: hide the top floor(cut) slabs of each tower; dim the highest survivor.
@@ -789,6 +808,7 @@ export function createThreeView(
       // renderer after we have gone.
       chainToken += 1;
       soldier.dispose();
+      skyView.dispose();
       chain.dispose();
       renderer.dispose();
       scene.traverse((o) => {

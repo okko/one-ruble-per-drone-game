@@ -72,6 +72,22 @@ export interface TierPolicy {
   shadows: boolean;
   /** Square shadow-map edge. 0 when shadows are off. */
   shadowMapSize: number;
+  /**
+   * Prefilter the sky into an environment map for image-based lighting.
+   *
+   * Cheap to *sample* and expensive to *bake* — a cube render plus a roughness mip chain, which a
+   * software rasteriser pays for in whole frames. It is the ambient response that makes metal read
+   * as metal, so it is worth real money on hardware and worth none at all without it.
+   */
+  environment: boolean;
+  /**
+   * Stars and the sun's halo in the sky shader.
+   *
+   * The dome covers most of the frame, so anything per-pixel in it is paid for on almost every pixel
+   * on the screen. The gradient and the sun's disc are free enough to keep everywhere; the two
+   * transcendental terms are not, and were measured tripling frame time on a software rasteriser.
+   */
+  richSky: boolean;
   /** Upper bound on `devicePixelRatio`; the dominant cost lever on a phone. */
   pixelRatioCap: number;
 }
@@ -84,6 +100,8 @@ const POLICIES: Readonly<Record<Tier, TierPolicy>> = Object.freeze({
     antialias: true,
     shadows: true,
     shadowMapSize: 2048,
+    environment: true,
+    richSky: true,
     pixelRatioCap: 3,
   },
   medium: {
@@ -93,6 +111,8 @@ const POLICIES: Readonly<Record<Tier, TierPolicy>> = Object.freeze({
     antialias: true,
     shadows: true,
     shadowMapSize: 1024,
+    environment: true,
+    richSky: true,
     pixelRatioCap: 2,
   },
   low: {
@@ -102,6 +122,8 @@ const POLICIES: Readonly<Record<Tier, TierPolicy>> = Object.freeze({
     antialias: false,
     shadows: false,
     shadowMapSize: 0,
+    environment: false,
+    richSky: false,
     pixelRatioCap: 1,
   },
 });

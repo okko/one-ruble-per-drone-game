@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { difficultyAt, phaseAt, daylightAt } from './difficulty';
+import { difficultyAt, phaseAt, daylightAt, dayCycleAt } from './difficulty';
 import type { DifficultyRamp } from './difficulty';
 
 const ramp: DifficultyRamp = { rampSeconds: 120, maxD: 12, dayLengthSeconds: 90 };
@@ -48,5 +48,45 @@ describe('daylightAt', () => {
       expect(v).toBeLessThanOrEqual(1);
       expect(daylightAt(t, ramp)).toBe(v);
     }
+  });
+});
+
+describe('dayCycleAt', () => {
+  it('puts midnight at 0 and midday at 0.5', () => {
+    expect(dayCycleAt(45, ramp)).toBeCloseTo(0.5, 6); // mid-day
+    expect(dayCycleAt(135, ramp)).toBeCloseTo(0, 6); // mid-night
+  });
+
+  it('agrees with daylightAt about when noon is', () => {
+    // The two share a clock. If they ever disagreed, the painted sun would rise while the lights set.
+    for (let t = 0; t < 360; t += 7) {
+      const expected = (1 - Math.cos(dayCycleAt(t, ramp) * 2 * Math.PI)) / 2;
+      expect(daylightAt(t, ramp)).toBeCloseTo(expected, 6);
+    }
+  });
+
+  it('advances in one direction, which is the whole reason it exists', () => {
+    // `daylightAt` is a cosine and reads the same at dawn and dusk. This must not.
+    expect(dayCycleAt(0, ramp)).not.toBeCloseTo(dayCycleAt(90, ramp), 3);
+    let prev = dayCycleAt(1, ramp);
+    for (let t = 2; t < 89; t += 1) {
+      const v = dayCycleAt(t, ramp);
+      expect(v).toBeGreaterThan(prev);
+      prev = v;
+    }
+  });
+
+  it('stays in [0,1) and wraps once per full cycle', () => {
+    for (const t of [0, 30, 60, 90, 120, 200, 500, 5000]) {
+      const v = dayCycleAt(t, ramp);
+      expect(v).toBeGreaterThanOrEqual(0);
+      expect(v).toBeLessThan(1);
+    }
+    // One full day+night is `dayLengthSeconds * 2`.
+    expect(dayCycleAt(200, ramp)).toBeCloseTo(dayCycleAt(200 + 180, ramp), 6);
+  });
+
+  it('clamps negative time the same way the rest of the ramp does', () => {
+    expect(dayCycleAt(-50, ramp)).toBeCloseTo(dayCycleAt(0, ramp), 6);
   });
 });

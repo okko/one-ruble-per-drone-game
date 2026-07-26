@@ -118,7 +118,13 @@ describe('what a tier is allowed to spend', () => {
     expect(high).toMatchObject({ post: true, ambientOcclusion: true, bloom: true, shadows: true });
 
     const low = policyFor('low', plain);
-    expect(low).toMatchObject({ post: false, bloom: false, shadows: false, shadowMapSize: 0 });
+    expect(low).toMatchObject({
+      post: false,
+      bloom: false,
+      shadows: false,
+      shadowMapSize: 0,
+      environment: false,
+    });
   });
 
   it('drops only ambient occlusion between high and medium', () => {
@@ -127,7 +133,27 @@ describe('what a tier is allowed to spend', () => {
     expect(medium.bloom).toBe(true);
     expect(medium.ambientOcclusion).toBe(false);
     expect(medium.shadows).toBe(true);
+    expect(medium.environment).toBe(true);
     expect(medium.shadowMapSize).toBeLessThan(policyFor('high', plain).shadowMapSize);
+  });
+
+  it('bakes an environment map only where there is a GPU to bake it', () => {
+    // The bake is a cube render plus a mip chain. On a software rasteriser it costs whole frames,
+    // and it was measured doing exactly that: the low tier goes without.
+    expect(policyFor('high', plain).environment).toBe(true);
+    expect(policyFor('low', plain).environment).toBe(false);
+  });
+
+  it('gives the low tier a plain sky, because the sky is most of the screen', () => {
+    // Measured, not guessed: the full sky shader tripled the low tier's frame time. The gradient and
+    // the sun's disc survive on every tier; the stars and the halo are what get spent here.
+    expect(policyFor('high', plain).richSky).toBe(true);
+    expect(policyFor('medium', plain).richSky).toBe(true);
+    expect(policyFor('low', plain).richSky).toBe(false);
+  });
+
+  it('keeps the environment map when reducedFlash is set, because ambient light does not flash', () => {
+    expect(policyFor('high', { reducedFlash: true }).environment).toBe(true);
   });
 
   it('caps the pixel ratio harder as the tier falls', () => {
