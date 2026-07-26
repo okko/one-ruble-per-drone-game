@@ -82,8 +82,9 @@
         z-index: 2;
         pointer-events: none;
       }
-      /* Shown by the scaler when the device is in portrait (orientation lock is unavailable
-         on iOS Safari — we prompt, we cannot force; docs/compatibility.md §3). */
+      /* The rotate prompt is CSS-only. Orientation lock is unavailable on iOS Safari — we
+         prompt, we cannot force (docs/compatibility.md §3) — and a media query does this
+         without a resize listener or a frame of the wrong layout. */
       #rotate-overlay {
         position: fixed;
         inset: 0;
@@ -92,14 +93,16 @@
         justify-content: center;
         background: #1a1c2c;
         color: #fff6e6;
-        font-family: monospace;
+        font-family: system-ui, sans-serif;
         font-size: 1.25rem;
         text-align: center;
         padding: 2rem;
         z-index: 10;
       }
-      #rotate-overlay[data-visible='true'] {
-        display: flex;
+      @media (orientation: portrait) {
+        #rotate-overlay {
+          display: flex;
+        }
       }
     </style>
   </head>

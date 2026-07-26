@@ -1,7 +1,9 @@
-// @vitest-environment node
-import { describe, it, expect, vi } from 'vitest';
+// The menu is DOM now: option hit-testing is the browser's job, so the pointer paths are only
+// meaningful against a real document.
+// @vitest-environment jsdom
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createMainMenuScene } from './main-menu-scene';
-import { createRecordingRenderer } from '../test-support/recording-renderer';
+import { createUiShell, type UiShell } from './shell/ui-shell';
 import { MENU_ITEMS } from '../content/menu';
 import { DEFAULT_TABLE } from '../content/highscores.defaults';
 import { DEFAULT_SETTINGS, type Settings } from '../persistence/schemas';
@@ -12,7 +14,24 @@ import type { HighscoresRepo } from '../persistence/highscores-repo';
 import type { AudioEngineImpl } from '../audio/engine';
 
 const ctx = {} as unknown as SystemContext;
-// itemY(i) = OPTIONS_Y0(100) + i * ITEM_H(18); option #2 sits at y = 136, centred on x = 192.
+
+let root: HTMLElement;
+let shell: UiShell;
+
+beforeEach(() => {
+  root = document.createElement('div');
+  document.body.append(root);
+  shell = createUiShell(root);
+});
+
+afterEach(() => {
+  shell.dispose();
+  root.remove();
+});
+
+function options(): HTMLButtonElement[] {
+  return [...root.querySelectorAll<HTMLButtonElement>('.ui-menu-item')];
+}
 
 function fakeSettings(o: { muted?: boolean; reducedMotion?: boolean } = {}): SettingsRepo {
   const s: Settings = {
@@ -37,6 +56,7 @@ function makeScene(o: { muted?: boolean; reducedMotion?: boolean; idleTimeoutS?:
     audio,
     settings: fakeSettings(o),
     highscores: fakeHighscores(),
+    shell,
     ...(o.idleTimeoutS !== undefined ? { idleTimeoutS: o.idleTimeoutS } : {}),
   });
   scene.enter(undefined, ctx);
@@ -44,11 +64,10 @@ function makeScene(o: { muted?: boolean; reducedMotion?: boolean; idleTimeoutS?:
 }
 
 describe('Main Menu scene', () => {
-  it('renders all five option labels', () => {
-    const { scene } = makeScene();
-    const r = createRecordingRenderer();
-    scene.render(r);
-    for (const item of MENU_ITEMS) expect(r.textsContaining(item.label).length).toBeGreaterThan(0);
+  it('shows all five option labels as real buttons', () => {
+    makeScene();
+    const labels = options().map((b) => b.textContent);
+    for (const item of MENU_ITEMS) expect(labels).toContain(item.label);
   });
 
   it('keyboard navigation moves the selection', () => {
@@ -70,11 +89,29 @@ describe('Main Menu scene', () => {
     expect(scene.selectedIndex).toBe(2); // skipped the disabled #1
   });
 
-  it('pointer hover sets the selection; disabled is a no-op', () => {
-    const { scene } = makeScene();
-    scene.onInput({ type: 'aim', world: { x: 192, y: 136 } });
+  it('a pointer entering an option selects it; a click activates it', () => {
+    const { scene, transition } = makeScene();
+    const [start, , settingsBtn] = options();
+    settingsBtn?.dispatchEvent(new Event('pointerenter'));
     expect(scene.selectedIndex).toBe(2);
-    scene.selectedIndex = 0;
+    expect(transition).not.toHaveBeenCalled(); // hovering must never activate
+    start?.dispatchEvent(new Event('click'));
+    expect(transition).toHaveBeenCalledWith('Playing');
+  });
+
+  it('marks the selection and disabled state on the buttons themselves', () => {
+    const { scene } = makeScene();
+    const disabled = scene.items[1];
+    if (disabled) disabled.enabled = false;
+    scene.render(0);
+    const [first, second] = options();
+    expect(first?.getAttribute('aria-selected')).toBe('true');
+    expect(second?.getAttribute('aria-disabled')).toBe('true');
+    expect(second?.disabled).toBe(true);
+  });
+
+  it('selectAt is a no-op on a disabled option', () => {
+    const { scene } = makeScene();
     const it = scene.items[2];
     if (it) it.enabled = false;
     scene.selectAt(2);
@@ -126,19 +163,33 @@ describe('Main Menu scene', () => {
     expect(playSfx).toHaveBeenCalledWith('uiConfirm');
   });
 
-  it('is settings-aware: muted shows a glyph; reduced-motion suppresses attract', () => {
+  it('is settings-aware: muted shows a badge; reduced-motion suppresses attract', () => {
     const muted = makeScene({ muted: true });
-    const r = createRecordingRenderer();
-    muted.scene.render(r);
-    expect(r.textsContaining('MUTE').length).toBeGreaterThan(0);
+    muted.scene.render(0);
+    expect(root.querySelector('.menu-mute')?.hasAttribute('hidden')).toBe(false);
+    shell.hide('main-menu');
 
     const plain = makeScene();
-    const r2 = createRecordingRenderer();
-    plain.scene.render(r2);
-    expect(r2.textsContaining('MUTE').length).toBe(0);
+    plain.scene.render(0);
+    expect(root.querySelector('.menu-mute')?.hasAttribute('hidden')).toBe(true);
+    shell.hide('main-menu');
 
     const reduced = makeScene({ reducedMotion: true, idleTimeoutS: 1 });
     reduced.scene.update(2, ctx);
     expect(reduced.scene.panel).toBe('none'); // no attract animation under reduced motion
+  });
+
+  it('swaps the visible panel and takes the whole screen down on exit', () => {
+    const { scene } = makeScene();
+    const heading = (): string | null | undefined => root.querySelector('h2.ui-title')?.textContent;
+    expect(heading()).toBeUndefined(); // the root menu has no panel heading
+    scene.confirm(3);
+    scene.render(0);
+    expect(heading()).toBe('HOW TO PLAY');
+    scene.closePanel();
+    scene.render(0);
+    expect(heading()).toBeUndefined();
+    scene.exit();
+    expect(shell.get('main-menu')).toBeUndefined();
   });
 });

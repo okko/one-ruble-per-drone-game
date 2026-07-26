@@ -1,13 +1,11 @@
 /**
- * Credits view — PURE scroll + render (docs/areas/12-credits.md §3/§4). Deterministic: `scrollY` is
+ * Credits view — PURE scroll state (docs/areas/12-credits.md §3/§4). Deterministic: `scrollY` is
  * advanced only by injected `dt` (no clock, no RNG), so the same `dt` sequence yields the same
- * scroll. Rendered as the Main Menu's Credits panel (loop end-behavior); the `return` end-behavior +
- * `pageCredits` (reduced-motion paging) are implemented and tested for completeness. View state is
- * local — viewing credits mutates no gameplay state (§7).
+ * scroll. The Main Menu's Credits panel translates a DOM column by `scrollY`; this module owns the
+ * roster flattening and the scroll maths, and knows nothing about how a line is drawn. The `return`
+ * end-behavior + `pageCredits` (reduced-motion paging) are implemented and tested for completeness.
+ * View state is local — viewing credits mutates no gameplay state (§7).
  */
-import type { Renderer } from '../render/renderer';
-import type { PaletteKey } from '../render/palette';
-import type { SpriteId } from '../content/sprite-ids';
 import type { CreditsRoster } from '../content/credits';
 
 export const SCROLL_PX_PER_SEC = 14;
@@ -33,13 +31,19 @@ export function createCreditsView(speed = SCROLL_PX_PER_SEC): CreditsViewState {
   return { scrollY: 0, speed, finished: false };
 }
 
-interface Line {
+/**
+ * One line of the roll. `LINE_H` is the nominal line height the scroll maths uses; the DOM panel's
+ * real line height is close enough that the roll still takes about the intended time to pass, and
+ * nothing downstream depends on the two agreeing exactly.
+ */
+export interface CreditsLine {
   text: string;
   kind: 'heading' | 'title' | 'name' | 'spacer';
 }
 
-function flatten(roster: CreditsRoster): Line[] {
-  const lines: Line[] = [];
+/** Flatten the roster into the ordered lines of the roll. PURE. */
+export function creditsLines(roster: CreditsRoster): CreditsLine[] {
+  const lines: CreditsLine[] = [];
   for (const section of roster) {
     lines.push({ text: section.heading, kind: 'heading' });
     for (const entry of section.entries) {
@@ -53,7 +57,7 @@ function flatten(roster: CreditsRoster): Line[] {
 
 /** Total scrollable height of the roll (px). */
 export function creditsContentHeight(roster: CreditsRoster): number {
-  return flatten(roster).length * LINE_H;
+  return creditsLines(roster).length * LINE_H;
 }
 
 /** Advance the roll. Reduced-motion disables auto-scroll (the scene pages instead). */
@@ -85,18 +89,4 @@ export function scrubCredits(v: CreditsViewState, delta: number): void {
 export function pageCredits(v: CreditsViewState, dir: number, roster: CreditsRoster): void {
   const total = creditsContentHeight(roster);
   v.scrollY = Math.max(0, Math.min(total, v.scrollY + dir * PAGE_PX));
-}
-
-/** Draw the roll centered over whatever backdrop the caller already painted. */
-export function renderCredits(r: Renderer, v: CreditsViewState, roster: CreditsRoster): void {
-  const lines = flatten(roster);
-  const cx = Math.floor(r.width / 2);
-  lines.forEach((line, i) => {
-    if (line.kind === 'spacer') return;
-    const y = r.height + i * LINE_H - v.scrollY; // scrolls up from the bottom edge
-    const color: PaletteKey =
-      line.kind === 'heading' ? 'accentPink' : line.kind === 'title' ? 'rubleGold' : 'cream';
-    const font: SpriteId = line.kind === 'name' ? 'font.display' : 'font.hud';
-    r.text(line.text, cx, Math.round(y), { align: 'center', color, font });
-  });
 }

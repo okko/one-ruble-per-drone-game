@@ -1,0 +1,280 @@
+/*
+ * Layouts for the individual screens (docs/areas/10-hud-ui.md §3.2–§3.6).
+ * Everything here is composed from the tokens; no raw colours or sizes.
+ */
+
+/* ---------------------------------------------------------------------------
+ * Common screen scaffolding
+ *
+ * Screens are a vertical stack with the content block centred in the remaining
+ * space, so every screen reads the same way at any aspect ratio without media
+ * queries per screen.
+ * ------------------------------------------------------------------------- */
+.screen-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: var(--sp-6);
+  min-height: 0;
+  text-align: center;
+}
+
+.screen-footer {
+  flex: 0 0 auto;
+  padding: var(--sp-3) 0;
+  text-align: center;
+  font-size: var(--fs-sm);
+  color: var(--c-text-dim);
+  text-shadow: var(--text-scrim);
+}
+
+/* ---------------------------------------------------------------------------
+ * Main menu
+ * ------------------------------------------------------------------------- */
+.menu-masthead {
+  text-align: center;
+}
+
+/* The mute indicator is a status, not a control: it is corner-pinned and out of
+   the reading order of the menu itself. */
+.menu-mute {
+  position: absolute;
+  top: var(--inset-top);
+  right: var(--inset-right);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+  color: var(--c-warn);
+}
+
+.menu-mute[hidden] {
+  display: none;
+}
+
+/* Selection bob. Applied to the selected item only, and disabled wholesale by
+   the reduced-motion attribute in tokens.css. */
+@keyframes menu-bob {
+  0%,
+  100% {
+    transform: translateX(var(--sp-2));
+  }
+  50% {
+    transform: translateX(calc(var(--sp-2) + 3px));
+  }
+}
+
+.ui-menu-item[aria-selected='true'] {
+  animation: menu-bob 1.6s var(--ease-in-out) infinite;
+}
+
+:root[data-reduced-motion='true'] .ui-menu-item[aria-selected='true'] {
+  animation: none;
+}
+
+/* ---------------------------------------------------------------------------
+ * Panels (how-to-play, credits, attract)
+ * ------------------------------------------------------------------------- */
+.panel-lines {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  max-width: 46ch;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-md);
+  color: var(--c-text-muted);
+}
+
+/* The credits roll is a tall column translated by the pure scroll state. The
+   viewport clips it; JS only ever writes one transform per frame. */
+.credits-viewport {
+  position: relative;
+  flex: 1;
+  width: min(100%, 44ch);
+  overflow: hidden;
+  mask-image: linear-gradient(to bottom, transparent, #000 12%, #000 88%, transparent);
+}
+
+.credits-roll {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-1);
+  will-change: transform;
+}
+
+.credits-line[data-kind='heading'] {
+  margin-top: var(--sp-5);
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-black);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--c-accent);
+}
+
+.credits-line[data-kind='title'] {
+  margin-top: var(--sp-3);
+  font-size: var(--fs-xs);
+  letter-spacing: var(--tracking-wider);
+  text-transform: uppercase;
+  color: var(--c-text-dim);
+}
+
+.credits-line[data-kind='name'] {
+  font-size: var(--fs-md);
+  color: var(--c-text);
+}
+
+.credits-line[data-kind='spacer'] {
+  height: var(--sp-4);
+}
+
+/* ---------------------------------------------------------------------------
+ * Stat blocks (game over, attract)
+ * ------------------------------------------------------------------------- */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
+  gap: var(--sp-5);
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.stat-label {
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--tracking-wider);
+  text-transform: uppercase;
+  color: var(--c-text-dim);
+}
+
+.stat-value {
+  font-family: var(--font-numeric);
+  font-size: var(--fs-2xl);
+  font-weight: var(--fw-bold);
+  font-variant-numeric: tabular-nums;
+  color: var(--c-text);
+}
+
+.stat-value[data-accent='true'] {
+  color: var(--c-accent);
+}
+
+/* ---------------------------------------------------------------------------
+ * Highscores table
+ * ------------------------------------------------------------------------- */
+.scores {
+  width: min(100%, 68ch);
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-sm);
+}
+
+.scores th {
+  padding: var(--sp-2);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--tracking-wider);
+  text-transform: uppercase;
+  color: var(--c-text-dim);
+  text-align: left;
+  border-bottom: 1px solid var(--c-hairline);
+}
+
+.scores td {
+  padding: var(--sp-2);
+  color: var(--c-text-muted);
+  border-bottom: 1px solid var(--c-hairline-soft);
+}
+
+.scores .col-score {
+  text-align: right;
+  font-family: var(--font-numeric);
+  color: var(--c-accent);
+}
+
+.scores .col-rank {
+  width: 3ch;
+  color: var(--c-text-dim);
+}
+
+/* The row just entered. Marked with aria-current so it is announced, not merely
+   coloured — the highlight is information, not decoration. */
+.scores tr[aria-current='true'] td {
+  background: var(--c-accent-dim);
+  color: var(--c-text);
+}
+
+/* ---------------------------------------------------------------------------
+ * Name entry
+ * ------------------------------------------------------------------------- */
+.name-display {
+  font-family: var(--font-numeric);
+  font-size: var(--fs-3xl);
+  font-weight: var(--fw-black);
+  letter-spacing: var(--tracking-widest);
+  color: var(--c-text);
+  min-height: 1.2em;
+}
+
+.name-caret {
+  color: var(--c-accent);
+  animation: name-caret 1s steps(2, start) infinite;
+}
+
+@keyframes name-caret {
+  50% {
+    opacity: 0;
+  }
+}
+
+:root[data-reduced-motion='true'] .name-caret {
+  animation: none;
+}
+
+/* The on-screen picker is the touch input method, so every cell must clear the
+   44px tap minimum even on the narrowest supported viewport. */
+.picker {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(var(--tap-min), 1fr));
+  gap: var(--sp-1);
+  width: min(100%, 52ch);
+}
+
+.picker-cell {
+  pointer-events: auto;
+  min-height: var(--tap-min);
+  padding: 0;
+  border: 1px solid var(--c-hairline);
+  border-radius: var(--r-sm);
+  background: var(--c-surface);
+  color: var(--c-text-muted);
+  font: inherit;
+  font-family: var(--font-numeric);
+  font-size: var(--fs-lg);
+  cursor: pointer;
+}
+
+.picker-cell[aria-selected='true'] {
+  background: var(--c-accent);
+  border-color: var(--c-accent-strong);
+  color: var(--c-text-on-accent);
+  font-weight: var(--fw-bold);
+}
+
+.picker-cell[data-command='true'] {
+  font-size: var(--fs-sm);
+  letter-spacing: var(--tracking-wide);
+}

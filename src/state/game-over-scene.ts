@@ -10,12 +10,12 @@
 import type { Scene } from './scene';
 import type { SceneManager } from './scene-manager';
 import type { InputEvent } from '../input/input';
-import type { Renderer } from '../render/renderer';
 import type { HighscoresRepo } from '../persistence/highscores-repo';
 import type { MetaStatsRepo } from '../persistence/meta-stats-repo';
 import type { RunSummary } from '../persistence/schemas';
 import type { AudioEngineImpl } from '../audio/engine';
-import { drawSkyline } from '../render/backdrop';
+import type { UiShell } from '../ui/shell/ui-shell';
+import { createGameOverScreen, type GameOverVM } from '../ui/screens/game-over-screen';
 import { NO_CUT_LINE } from '../content/highscores.flavor';
 import { mmss, groupThousands } from '../ui/format';
 
@@ -31,6 +31,8 @@ export interface GameOverDeps {
   repo: HighscoresRepo;
   meta: MetaStatsRepo;
   audio?: Pick<AudioEngineImpl, 'playSfx'>;
+  /** Absent in node tests, where qualification and routing are what is under test. */
+  shell?: UiShell | undefined;
 }
 
 export function createGameOverScene(deps: GameOverDeps): Scene<GameOverParams> {
@@ -40,6 +42,19 @@ export function createGameOverScene(deps: GameOverDeps): Scene<GameOverParams> {
   let willQualify = false;
   let rank = 0;
   let elapsed = 0;
+  // Built on first show, never without a shell: a scene under node test has no document.
+  let screen: ReturnType<typeof createGameOverScreen> | undefined;
+
+  function vm(): GameOverVM {
+    return {
+      cause: cause.toUpperCase(),
+      score: groupThousands(score),
+      drones: String(summary.dronesDowned),
+      shift: mmss(summary.shiftSeconds),
+      prompt: willQualify ? 'A new record \u2014 press to sign in' : NO_CUT_LINE,
+      qualified: willQualify,
+    };
+  }
 
   return {
     enter(params: GameOverParams): void {
@@ -55,21 +70,19 @@ export function createGameOverScene(deps: GameOverDeps): Scene<GameOverParams> {
       willQualify = deps.repo.qualifies(score);
       rank = deps.repo.rankFor(score);
       elapsed = 0;
+      if (deps.shell) {
+        screen ??= createGameOverScreen();
+        deps.shell.show('gameover', screen, { scrim: true });
+        screen.update(vm());
+      }
     },
 
     update(dt: number): void {
       elapsed += dt;
     },
 
-    render(r: Renderer): void {
-      drawSkyline(r, { phase: 'night', dim: true });
-      r.text('SHIFT OVER', r.width / 2, 34, { align: 'center', color: 'accentPink', font: 'font.display' });
-      if (cause) r.text(cause.toUpperCase(), r.width / 2, 54, { align: 'center', color: 'cream' });
-      r.text(`SCORE ${groupThousands(score)}`, r.width / 2, 82, { align: 'center', color: 'rubleGold' });
-      r.text(`DRONES ${summary.dronesDowned}`, r.width / 2, 96, { align: 'center', color: 'cream' });
-      r.text(`SHIFT ${mmss(summary.shiftSeconds)}`, r.width / 2, 110, { align: 'center', color: 'cream' });
-      const prompt = willQualify ? 'A NEW RECORD — PRESS TO SIGN IN' : NO_CUT_LINE;
-      r.text(prompt, r.width / 2, 150, { align: 'center', color: 'cream' });
+    render(): void {
+      screen?.update(vm());
     },
 
     onInput(e: InputEvent): void {
@@ -85,6 +98,8 @@ export function createGameOverScene(deps: GameOverDeps): Scene<GameOverParams> {
       }
     },
 
-    exit(): void {},
+    exit(): void {
+      deps.shell?.hide('gameover');
+    },
   };
 }

@@ -14,9 +14,8 @@ export function createBootScene(manager: SceneManager, meta: MetaStatsRepo): Sce
       manager.transition('MainMenu');
     },
     update(): void {},
-    render(r): void {
-      r.clear('ink');
-    },
+    // Boot routes straight through on enter, so there is never a frame to show.
+    render(): void {},
     onInput(): void {},
     exit(): void {},
   };
