@@ -31,7 +31,7 @@ const OUT_DIR = join(ROOT, 'public', 'gen');
  * older checkout is rejected rather than half-used. The recipe hash below catches parameter
  * changes; this catches shape changes the hash cannot see.
  */
-const MANIFEST_VERSION = 1;
+const MANIFEST_VERSION = 2;
 
 /**
  * Ceiling on the total generated payload, enforced below.
@@ -50,6 +50,10 @@ const BUDGET_BYTES = 320 * 1024;
  */
 const RECIPE = {
   concrete: { albedoSize: 256, normalSize: 128, roughnessSize: 128, seed: 20260726 },
+  // The window mask is deliberately tiny. It holds a handful of panes and is tiled to whatever
+  // density each facade calls for (see `windowsFor` in src/render/three/assets.ts), so resolution
+  // here buys sharper *frames*, not more windows — and it compresses to almost nothing.
+  windows: { size: 128, columns: 4, rows: 4, mullion: 0.34, darkFraction: 0.55, seed: 90210 },
 };
 
 function recipeSignature(texgenSource) {
@@ -107,6 +111,7 @@ async function main() {
     concreteAlbedo: surfaceAt(RECIPE.concrete.albedoSize).albedo,
     concreteNormal: surfaceAt(RECIPE.concrete.normalSize).normal,
     concreteRoughness: surfaceAt(RECIPE.concrete.roughnessSize).roughness,
+    windowEmissive: texgen.windowGrid(RECIPE.windows),
   };
 
   // A clean slate, so a renamed or dropped texture cannot linger and be served forever.
@@ -123,7 +128,16 @@ async function main() {
     total += png.length;
   }
 
-  writeFileSync(manifestPath, `${JSON.stringify({ version: MANIFEST_VERSION, signature, textures }, null, 2)}\n`);
+  // The window grid goes in the manifest rather than being duplicated in the runtime: the facade
+  // has to know how many panes one repeat holds before it can work out its own repeat, and the
+  // recipe is the only thing that actually decides that.
+  const manifest = {
+    version: MANIFEST_VERSION,
+    signature,
+    windowGrid: { columns: RECIPE.windows.columns, rows: RECIPE.windows.rows },
+    textures,
+  };
+  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
   const kb = (n) => `${(n / 1024).toFixed(1)} kB`;
   for (const [key, meta] of Object.entries(textures)) console.log(`  ${key.padEnd(18)} ${meta.size}px  ${kb(meta.bytes)}`);

@@ -28,14 +28,22 @@ interface RenderStats {
 type RenderWindow = Window & { __render?: { stats: RenderStats | null }; __scene?: { id: string } };
 
 /**
- * Geometries the Playing scene may hold. One per skyline slab, per lit window, per floor of the
- * cut-away tower, plus the pooled drones and tracers. Lower it when instancing makes the scene
- * cheaper — that is the ratchet. A per-frame `new Geometry` blows through it within seconds.
+ * Geometries the Playing scene may hold. One per rooftop prop, one per instanced city part, plus
+ * the pooled drones and tracers. Lower it when instancing makes the scene cheaper — that is the
+ * ratchet. A per-frame `new Geometry` blows through it within seconds.
+ *
+ * Ratcheted 600 → 200 when the skyline stopped being a mesh per storey: eight towers of sixteen to
+ * twenty-five floors were 324 of the old count on their own, and are now five instanced meshes plus
+ * one per tower. Measured settled: 100 geometries on the low tier, 112 on the high.
  */
-const GEOMETRY_CEILING = 600;
+const GEOMETRY_CEILING = 200;
 
-/** A runaway guard only. Not comparable across tiers; the growth checks below are the real gate. */
-const DRAW_CALL_CEILING = 2000;
+/**
+ * A runaway guard only. Not comparable across tiers — a composited tier draws the scene more than
+ * once — so this is deliberately loose; the growth checks below are the real gate. Ratcheted
+ * 2000 → 400 alongside the geometry ceiling, against a measured 110 on the uncomposited tier.
+ */
+const DRAW_CALL_CEILING = 400;
 
 /** Start a run and settle into the Playing scene, where the world is at its most expensive. */
 async function startRun(page: Page): Promise<void> {

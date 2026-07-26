@@ -75,7 +75,9 @@ export function rigFor(daylight: number): LightRig {
     hemisphere: 0.35 + d * 0.75,
     key: 0.3 + d * 0.9,
     keyColor,
-    windowGlow: 0.25 + (1 - d) * 1.1,
+    // Daylight leaves only a trace: a lit office at noon is invisible from across a city, and the
+    // facades now carry a real window mask, so anything more turned every tower into a gold brick.
+    windowGlow: 0.08 + (1 - d) * 1.27,
     sunElevation: d,
     night: 1 - d,
     // The haze is the horizon's own colour, so distance dissolves into the sky rather than into a

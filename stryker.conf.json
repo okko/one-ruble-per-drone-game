@@ -16,6 +16,7 @@
     "src/render/three/quality.ts",
     "src/render/three/lighting.ts",
     "src/render/three/texgen.ts",
+    "src/render/three/city-layout.ts",
     "!src/**/*.test.ts",
     "!src/test-support/**/*.ts"
   ],

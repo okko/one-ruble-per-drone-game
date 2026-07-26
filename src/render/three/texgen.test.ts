@@ -6,6 +6,7 @@ import {
   heightToNormal,
   tilingFbm,
   tilingValueNoise,
+  windowGrid,
   type Bitmap,
 } from './texgen';
 
@@ -200,5 +201,106 @@ describe('concrete', () => {
   it('is deterministic, so two builds produce byte-identical assets', () => {
     expect(Array.from(concrete(SIZE, 21).albedo.data)).toEqual(Array.from(maps.albedo.data));
     expect(Array.from(concrete(SIZE, 22).albedo.data)).not.toEqual(Array.from(maps.albedo.data));
+  });
+});
+
+describe('windowGrid', () => {
+  const base = { size: 64, columns: 8, rows: 4, mullion: 0.25, darkFraction: 0.3, seed: 5 };
+
+  /** Runs of consecutive lit pixels along a row — i.e. how many panes that row actually shows. */
+  function panes(bmp: Bitmap, y: number): number {
+    let runs = 0;
+    let inside = false;
+    for (let x = 0; x < bmp.width; x += 1) {
+      const lit = at(bmp, x, y) > 0;
+      if (lit && !inside) runs += 1;
+      inside = lit;
+    }
+    return runs;
+  }
+
+  /** The y at the middle of pane row `row`. */
+  function rowMid(bmp: Bitmap, rows: number, row: number): number {
+    return Math.floor(((row + 0.5) * bmp.height) / rows);
+  }
+
+  it('is a single-channel map at the requested size', () => {
+    expect(windowGrid(base)).toMatchObject({ width: 64, height: 64, channels: 1 });
+  });
+
+  it('frames every pane, so the tile seam is a mullion like any other', () => {
+    const grid = windowGrid({ ...base, darkFraction: 0 });
+    const mid = rowMid(grid, base.rows, 0);
+    expect(at(grid, 0, mid)).toBe(0);
+    expect(at(grid, grid.width - 1, mid)).toBe(0);
+    expect(at(grid, 4, 0)).toBe(0);
+    expect(at(grid, 4, grid.height - 1)).toBe(0);
+  });
+
+  it('lays out exactly as many panes across as it was asked for', () => {
+    const grid = windowGrid({ ...base, darkFraction: 0 });
+    expect(panes(grid, rowMid(grid, base.rows, 1))).toBe(base.columns);
+    expect(panes(windowGrid({ ...base, columns: 3, rows: 1, darkFraction: 0 }), 32)).toBe(3);
+  });
+
+  it('varies the pattern down the grid as well as across it, so dark windows are not stripes', () => {
+    const grid = windowGrid({ ...base, rows: 4, darkFraction: 0.4, seed: 11 });
+    const pattern = (row: number) => {
+      const y = rowMid(grid, 4, row);
+      return Array.from({ length: grid.width }, (_, x) => (at(grid, x, y) > 0 ? 1 : 0)).join('');
+    };
+    expect(new Set([pattern(0), pattern(1), pattern(2), pattern(3)]).size).toBeGreaterThan(1);
+  });
+
+  it('leaves some windows dark, because nobody is home on every floor at once', () => {
+    const grid = windowGrid(base);
+    let shown = 0;
+    for (let row = 0; row < base.rows; row += 1) shown += panes(grid, rowMid(grid, base.rows, row));
+    expect(shown).toBeGreaterThan(0);
+    expect(shown).toBeLessThan(base.columns * base.rows);
+  });
+
+  it('draws nothing at all when every window is dark', () => {
+    const grid = windowGrid({ ...base, darkFraction: 1 });
+    expect(Math.max(...grid.data)).toBe(0);
+  });
+
+  it('falls off down each pane, so a window is not a flat rectangle of paint', () => {
+    const grid = windowGrid({ ...base, darkFraction: 0 });
+    const cell = grid.height / base.rows;
+    const x = Math.floor((grid.width / base.columns) * 0.5);
+    const top = at(grid, x, Math.floor(cell * 0.25));
+    const bottom = at(grid, x, Math.floor(cell * 0.8));
+    expect(top).toBeGreaterThan(bottom);
+    expect(bottom).toBeGreaterThan(0);
+  });
+
+  it('widens the frame as the mullion grows', () => {
+    const thin = windowGrid({ ...base, mullion: 0.1, darkFraction: 0 });
+    const thick = windowGrid({ ...base, mullion: 0.4, darkFraction: 0 });
+    const count = (bmp: Bitmap) => bmp.data.reduce((n, v) => n + (v === 0 ? 1 : 0), 0);
+    expect(count(thick)).toBeGreaterThan(count(thin));
+  });
+
+  it('keeps the same panes lit when only the darkness threshold moves', () => {
+    // The brightness roll must not be consumed by the darkness roll, or re-tuning how many windows
+    // are dark would silently repaint every remaining one.
+    const some = windowGrid({ ...base, darkFraction: 0.3 });
+    const none = windowGrid({ ...base, darkFraction: 0 });
+    const y = rowMid(some, base.rows, 2);
+    let matched = 0;
+    for (let x = 0; x < some.width; x += 1) {
+      const a = at(some, x, y);
+      if (a > 0) {
+        expect(a).toBe(at(none, x, y));
+        matched += 1;
+      }
+    }
+    expect(matched).toBeGreaterThan(0);
+  });
+
+  it('is deterministic, and a different seed lights different windows', () => {
+    expect(Array.from(windowGrid(base).data)).toEqual(Array.from(windowGrid(base).data));
+    expect(Array.from(windowGrid({ ...base, seed: 6 }).data)).not.toEqual(Array.from(windowGrid(base).data));
   });
 });

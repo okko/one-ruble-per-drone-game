@@ -191,3 +191,81 @@ export function concrete(size: number, seed: number): SurfaceMaps {
     roughness: greyscale(rough, n, 0.45, 1),
   };
 }
+
+/** Shape of the window grid. See `windowGrid`. */
+export interface WindowGridOptions {
+  /** Output edge length in pixels. */
+  size: number;
+  /** Panes across one repeat of the texture. */
+  columns: number;
+  /** Panes down one repeat of the texture. */
+  rows: number;
+  /** Share of each cell given over to the frame between panes, split across its two edges. */
+  mullion: number;
+  /** Share of panes left unlit. Nobody is home on every floor at once. */
+  darkFraction: number;
+  seed: number;
+}
+
+/**
+ * A tiling grid of lit windows, as an emissive mask: 0 in the frame, bright in the glass.
+ *
+ * ## Why the grid is small and repeated rather than large and unique
+ *
+ * A skyline band is a different size on every tier of every tower, so the number of windows it
+ * should show cannot be baked into the texture — it is settled at runtime by the map's `repeat`,
+ * from the band's own world size. The texture therefore holds a handful of panes and is tiled to
+ * whatever density the surface calls for, which is also why a 4×4 grid at 128px looks sharper here
+ * than a 16×16 grid at 512px would.
+ *
+ * It has two dimensions rather than one for the same reason a brick wall is not stripes: a single
+ * row repeated up a tower puts every dark window in a vertical line, and the eye finds that
+ * instantly. A square block of hashed panes repeats too, but at a period nothing reads as a pattern.
+ *
+ * ## Why the lit/dark pattern is hashed rather than random per pixel
+ *
+ * Panes are drawn from a seeded table indexed by cell, so the pattern is periodic with the grid and
+ * the texture tiles. Which windows are dark is the single strongest cue that a building is lived in
+ * rather than extruded, and it costs nothing.
+ */
+export function windowGrid(options: WindowGridOptions): Bitmap {
+  const n = Math.max(1, Math.floor(options.size));
+  const cols = Math.max(1, Math.floor(options.columns));
+  const rows = Math.max(1, Math.floor(options.rows));
+  // Half the frame sits at each edge of a cell, so adjacent panes share a frame of the full width
+  // and the frame at the tile seam is the same thickness as every other.
+  const edge = Math.min(0.49, Math.max(0, options.mullion) / 2);
+  const rng = createRng(options.seed);
+
+  const lit = new Float64Array(cols * rows);
+  for (let i = 0; i < lit.length; i += 1) {
+    // Two draws per pane whatever the outcome, so the darkness roll cannot shift the brightness
+    // sequence — otherwise changing `darkFraction` would repaint every window, not just some.
+    const dark = rng.next() < options.darkFraction;
+    const brightness = 0.55 + 0.45 * rng.next();
+    lit[i] = dark ? 0 : brightness;
+  }
+
+  const data = new Uint8ClampedArray(n * n);
+  for (let y = 0; y < n; y += 1) {
+    // Sampled at the pixel's centre, not its corner. On a corner the frame at the far edge of a
+    // cell lands exactly on the boundary and rounds away, so every pane ends up with a frame on one
+    // side and none on the other — and the tile seam gets half a mullion.
+    const cellY = ((y + 0.5) * rows) / n;
+    const row = Math.min(rows - 1, Math.floor(cellY));
+    const v = cellY - row;
+    // Brighter at the top of the pane: a room is lit from its ceiling, and the gradient is what
+    // separates a window from a rectangle at the distance this is seen from.
+    const falloff = 1 - 0.42 * v;
+    const inFrameV = v < edge || v > 1 - edge;
+    for (let x = 0; x < n; x += 1) {
+      const cellX = ((x + 0.5) * cols) / n;
+      const col = Math.min(cols - 1, Math.floor(cellX));
+      const u = cellX - col;
+      const value =
+        inFrameV || u < edge || u > 1 - edge ? 0 : (lit[row * cols + col] as number) * falloff;
+      data[y * n + x] = byte(value);
+    }
+  }
+  return { width: n, height: n, channels: 1, data };
+}
