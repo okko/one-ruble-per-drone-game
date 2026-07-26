@@ -1,0 +1,225 @@
+/*
+ * The UI shell: the #ui root, mounted screens, overlays, and the shared
+ * primitives every screen is built from (docs/areas/10-hud-ui.md §3.1/§3.1c).
+ */
+
+/* ---------------------------------------------------------------------------
+ * The root layer
+ *
+ * #ui covers the viewport but is CLICK-THROUGH by default. Only interactive
+ * elements opt back in. A full-screen transparent container that eats
+ * `pointerdown` silently breaks aiming — that is a required test case.
+ * ------------------------------------------------------------------------- */
+#ui {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-ui);
+  pointer-events: none;
+  font-family: var(--font-ui);
+  font-size: var(--fs-md);
+  line-height: var(--lh-normal);
+  color: var(--c-text);
+  -webkit-font-smoothing: antialiased;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+#ui button,
+#ui [role='button'],
+#ui .interactive {
+  pointer-events: auto;
+}
+
+/* ---------------------------------------------------------------------------
+ * Screens
+ * ------------------------------------------------------------------------- */
+.ui-screen {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  padding: var(--inset-top) var(--inset-right) var(--inset-bottom) var(--inset-left);
+  opacity: 1;
+  transition:
+    opacity var(--dur-med) var(--ease-out),
+    transform var(--dur-med) var(--ease-out);
+}
+
+/* Entering and leaving a screen is an eased transition, never a cut. The shell
+   sets data-state; CSS owns what that looks like. */
+.ui-screen[data-state='entering'],
+.ui-screen[data-state='exiting'] {
+  opacity: 0;
+  transform: translateY(var(--sp-3));
+  pointer-events: none;
+}
+
+/* A full-bleed screen (menu, credits) dims the live 3D scene behind it just
+   enough to keep type legible over a bright sky. */
+.ui-screen[data-scrim='true'] {
+  background: linear-gradient(
+    to bottom,
+    rgb(5 7 13 / 55%),
+    rgb(5 7 13 / 25%) 45%,
+    rgb(5 7 13 / 70%)
+  );
+  pointer-events: auto;
+}
+
+.ui-overlay {
+  z-index: var(--z-overlay);
+}
+
+/* ---------------------------------------------------------------------------
+ * Shared primitives
+ * ------------------------------------------------------------------------- */
+
+/* Emoji used as an icon. The dedicated font stack keeps the glyph out of the
+   body text metrics; per-platform artwork variance is accepted by design
+   (docs/compatibility.md §2). */
+.icon {
+  font-family: var(--font-emoji);
+  font-style: normal;
+  line-height: 1;
+  font-variant-emoji: emoji;
+  speak: never;
+}
+
+.ui-title {
+  font-size: var(--fs-display);
+  font-weight: var(--fw-black);
+  letter-spacing: -0.02em;
+  line-height: var(--lh-tight);
+  margin: 0;
+  text-shadow: var(--text-scrim);
+  background: linear-gradient(180deg, var(--c-text) 30%, var(--c-accent));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.ui-tagline {
+  font-size: var(--fs-lg);
+  color: var(--c-text-muted);
+  margin: var(--sp-2) 0 0;
+  text-shadow: var(--text-scrim);
+}
+
+.ui-eyebrow {
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--tracking-wider);
+  text-transform: uppercase;
+  color: var(--c-text-dim);
+}
+
+/* Menu list --------------------------------------------------------------- */
+.ui-menu {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ui-menu-item {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-height: var(--tap-min);
+  padding: var(--sp-2) var(--sp-5);
+  border: 0;
+  border-left: 3px solid transparent;
+  border-radius: var(--r-md);
+  background: transparent;
+  color: var(--c-text-muted);
+  font: inherit;
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-medium);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    background-color var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+
+.ui-menu-item[aria-selected='true'] {
+  color: var(--c-text);
+  background: var(--c-accent-dim);
+  border-left-color: var(--c-accent);
+  transform: translateX(var(--sp-2));
+}
+
+.ui-menu-item[aria-disabled='true'] {
+  color: var(--c-text-dim);
+  cursor: default;
+  opacity: 0.55;
+}
+
+/* Focus is always visible. This is not negotiable and must survive restyling. */
+#ui :focus-visible {
+  outline: 2px solid var(--c-accent);
+  outline-offset: 3px;
+  border-radius: var(--r-sm);
+}
+
+/* Buttons ----------------------------------------------------------------- */
+.ui-button {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  min-height: var(--tap-min);
+  min-width: var(--tap-min);
+  padding: var(--sp-2) var(--sp-4);
+  border: 1px solid var(--c-hairline);
+  border-radius: var(--r-md);
+  background: var(--c-surface-raised);
+  color: var(--c-text);
+  font: inherit;
+  font-weight: var(--fw-medium);
+  cursor: pointer;
+  box-shadow: var(--shadow-1);
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+
+.ui-button:hover {
+  border-color: var(--c-accent);
+}
+
+.ui-button[data-variant='primary'] {
+  background: var(--c-accent);
+  border-color: var(--c-accent-strong);
+  color: var(--c-text-on-accent);
+  font-weight: var(--fw-bold);
+}
+
+.ui-panel {
+  pointer-events: auto;
+  background: var(--c-surface);
+  border: 1px solid var(--c-hairline);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-3);
+  padding: var(--sp-5);
+}
+
+/* Screen-reader-only text, for labelling emoji icons and live regions. */
+.ui-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}

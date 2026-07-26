@@ -73,6 +73,15 @@
         z-index: 2;
         pointer-events: none;
       }
+      /* The DOM UI layer: every screen and overlay is mounted here, composited over the live
+         3D scene. Click-through by default — only interactive elements opt back in, or aiming
+         breaks (docs/areas/10-hud-ui.md §3.1). Full styling lives in src/ui/styles/. */
+      #ui {
+        position: fixed;
+        inset: 0;
+        z-index: 2;
+        pointer-events: none;
+      }
       /* Shown by the scaler when the device is in portrait (orientation lock is unavailable
          on iOS Safari — we prompt, we cannot force; docs/compatibility.md §3). */
       #rotate-overlay {
@@ -100,6 +109,7 @@
     </div>
     <canvas id="game3d"></canvas>
     <div id="hud"></div>
+    <div id="ui"></div>
     <div id="rotate-overlay" aria-hidden="true">Please rotate your device to landscape ☺</div>
     <script type="module" src="/src/main.ts"></script>
   </body>

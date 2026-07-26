@@ -11,6 +11,7 @@
     "src/render/sprite-provider.ts",
     "src/render/scaler.ts",
     "src/state/scene-manager.ts",
+    "src/ui/shell/menu-model.ts",
     "!src/**/*.test.ts",
     "!src/test-support/**/*.ts"
   ],
