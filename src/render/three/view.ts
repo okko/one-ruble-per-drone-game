@@ -394,7 +394,9 @@ export function createThreeView(
   // recoil rig already wired. `BARREL_LEN` is still the one number that sets its scale, and the
   // muzzle it reports is what the tracer offset below is measured from — so the flash and the first
   // visible tracer come from the same point, which they did not when both were guessed separately.
-  const weapon = createWeapon(BARREL_LEN);
+  // `GUN_PIVOT_H` is handed over as well as used above: it is the drop from the pivot to the deck,
+  // which is the only way the rig can cut its tripod legs to actually stand on something.
+  const weapon = createWeapon(BARREL_LEN, GUN_PIVOT_H);
   gunPivot.add(weapon.group);
   const recoil = createRecoil();
 
@@ -415,17 +417,17 @@ export function createThreeView(
   const barrelPitch = weapon.pitch;
 
   /**
-   * Where the muzzle sits, and how the barrel must be turned, for a shot laid at arena angle `angle`.
+   * Where the muzzle sits, and how the mount must be trained, for a shot laid at arena angle `angle`.
    *
    * Written into a scratch record rather than returned, because the projectile loop calls it once per
    * round in flight and the render loop must not allocate.
    *
-   * Both angles come out of ONE target point, on purpose. Setting the yaw from the arena angle and
-   * then finding an elevation separately — which is what this did first — makes horizontal target
-   * motion roll the barrel about the view axis instead of swinging it. Yaw about z sends the barrel's
-   * +y to (−sin a, cos a, 0); pitching about the yawed frame's own x then gives
-   * (−sin a·cos p, cos a·cos p, sin p). Reading that backwards from the direction to the target is
-   * the whole solve: p = asin(z), a = atan2(−x, y).
+   * Both angles come out of ONE target point, and they are a heading and an elevation — the two
+   * things a pintle mount actually has. The rig's bore points down −z at rest, so a direction
+   * `(dx, dy, dz)` is reached by elevating to `asin(dy)` and training to `atan2(−dx, −dz)`, and the
+   * muzzle is then just the pivot plus the bore's reach along that same unit direction. Solving the
+   * two separately — a heading from the arena angle and an elevation from somewhere else — is what
+   * made the gun roll instead of swing, and rolling is what threw the ammunition can out sideways.
    */
   const muzzle = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0 };
   function solveMuzzle(angle: number): void {
@@ -435,15 +437,12 @@ export function createThreeView(
     const dy = ay(post.y) - Math.sin(angle) * AIM_RANGE * AS - gunPivot.position.y;
     const dz = ACTION_Z - gunPivot.position.z;
     const len = Math.hypot(dx, dy, dz);
-    const pitch = Math.asin(dz / len);
-    const yaw = Math.atan2(-dx, dy);
-    const reach = weapon.muzzleReach;
-    const cosP = Math.cos(pitch);
-    muzzle.yaw = yaw;
-    muzzle.pitch = pitch;
-    muzzle.x = gunPivot.position.x - reach * Math.sin(yaw) * cosP;
-    muzzle.y = gunPivot.position.y + reach * Math.cos(yaw) * cosP;
-    muzzle.z = gunPivot.position.z + reach * Math.sin(pitch);
+    const reach = weapon.muzzleReach / len;
+    muzzle.pitch = Math.asin(dy / len);
+    muzzle.yaw = Math.atan2(-dx, -dz);
+    muzzle.x = gunPivot.position.x + dx * reach;
+    muzzle.y = gunPivot.position.y + dy * reach;
+    muzzle.z = gunPivot.position.z + dz * reach;
   }
 
   // ---- The dressing around the post ------------------------------------------------------------
@@ -791,14 +790,13 @@ export function createThreeView(
     drones.update(sightings, now);
     vfx.advance(dt);
 
-    // Gun aim. The barrel models +y at rest and it is now pointed at a POINT in three dimensions
-    // rather than turned to an angle in the screen plane, because those stopped being the same thing
-    // the moment the drones moved back onto the city: the post stands 26 units in FRONT of the plane
-    // they fly on, so a barrel that only ever rolled in the screen plane pointed somewhere no round
-    // ever went. `solveMuzzle` does the decomposition; see it for why both angles come from one point.
+    // Gun aim. The mount is trained at a POINT in three dimensions rather than turned to an angle in
+    // the screen plane, because those stopped being the same thing the moment the drones moved back
+    // onto the city: the post stands 26 units in FRONT of the plane they fly on. `solveMuzzle` turns
+    // the target into the heading and elevation the mount actually has.
     gunPivot.visible = vs.mode === 'shooting';
     solveMuzzle(c.aim.effectiveAngle);
-    barrelYaw.rotation.z = muzzle.yaw;
+    barrelYaw.rotation.y = muzzle.yaw;
     barrelPitch.rotation.x = muzzle.pitch;
     // One kick per SHOT, not per firing frame. `fireCooldown` is reset upward by the sim the instant
     // a round leaves, so a rise in it is the only per-shot edge the render side can see — and it is

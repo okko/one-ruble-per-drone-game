@@ -32,21 +32,25 @@ const BELT_ROUNDS = 14;
 export interface WeaponRig {
   /** Mounts at the gun's yaw pivot; the caller positions this. */
   readonly group: THREE.Group;
-  /** Rotated about z to aim. The barrel models along +y, as the old one did. */
+  /**
+   * Traverse. Rotated about the WORLD Y axis — the axis a pintle mount actually turns on.
+   *
+   * It used to turn about z, which is the axis pointing at the camera, so aiming left or right
+   * rolled the entire weapon in the screen plane like the hand of a clock. The barrel ended up in
+   * the right place and everything hanging off it did not: the ammunition can swung out sideways
+   * and then overhead, which is not something a box of belted ammunition does.
+   */
   readonly yaw: THREE.Group;
   /**
-   * Rotated about ITS OWN x to lean the barrel away from the camera, inside `yaw`.
+   * Elevation. Rotated about ITS OWN x, inside `yaw`, positive being nose up.
    *
    * Two axes, in this order, because the gun is aimed at a point rather than in a direction. `yaw`
-   * carries the angle the simulation actually knows — the one in the flat arena the fight is fought
-   * in — and this carries the depth the arena does not have: the post stands well in front of the
-   * plane the drones fly on, so a barrel that only ever turned in the screen plane pointed somewhere
-   * no round ever went. Nesting matters. Applied inside the yaw, this tilts the already-aimed barrel
-   * out of the screen plane; applied outside it, the tilt would swing with the aim and the gun would
-   * roll.
+   * carries the heading and this carries the elevation, exactly as the mount underneath them does.
+   * Nesting matters: applied inside the traverse this tilts the already-trained barrel, while
+   * applied outside it the tilt would swing with the heading and the gun would roll.
    */
   readonly pitch: THREE.Group;
-  /** Distance from the yaw pivot to the muzzle, along +y in yaw space, at rest. */
+  /** Distance from the mount's pivot to the muzzle, along the bore, at rest. */
   readonly muzzleReach: number;
   /** Push the current recoil and flash state into the rig. Allocation-free. */
   update(recoil: RecoilState, reducedFlash: boolean): void;
@@ -64,19 +68,37 @@ function beltPoint(t: number, out: THREE.Vector3, span: number, drop: number): v
   out.set(0, -t * span, -drop * (0.18 + 4 * t * (1 - t)));
 }
 
-export function createWeapon(barrelLength: number): WeaponRig {
+/**
+ * @param barrelLength Sets every other dimension; the caller derives it from the soldier's height.
+ * @param mountHeight  Distance from the mount's pivot DOWN to the surface it stands on. The tripod
+ *   legs are cut to land exactly there. It has to be told, because the rig is positioned by its
+ *   pivot and cannot see the deck: left to a guessed fraction of the barrel the legs came out 54%
+ *   too long and the feet sat a third of a man's height inside the roof.
+ */
+export function createWeapon(barrelLength: number, mountHeight: number): WeaponRig {
   const group = new THREE.Group();
+  /** Traverse, about world y. See `WeaponRig.yaw`. */
   const yaw = new THREE.Group();
   group.add(yaw);
-  /** Elevation out of the screen plane. See `WeaponRig.pitch` for why it lives inside the yaw. */
+  /** Elevation, about the trained frame's own x. See `WeaponRig.pitch`. */
   const pitch = new THREE.Group();
   yaw.add(pitch);
+  /**
+   * The bore frame: everything below is modelled with the barrel running up +y and the gun's own up
+   * along +z, which is how it was drawn and is a perfectly good way to lay a gun out on paper. This
+   * quarter turn is what stands it up in the world — +y becomes −z (out toward the city) and +z
+   * becomes world up — so that the two rotations above are a real heading and a real elevation and
+   * the can hangs downward at every aim.
+   */
+  const bore = new THREE.Group();
+  bore.rotation.x = -Math.PI / 2;
+  pitch.add(bore);
   /** Moves back along the barrel under recoil; everything that fires is a child of it. */
   const recoiling = new THREE.Group();
-  pitch.add(recoiling);
+  bore.add(recoiling);
 
   const L = barrelLength;
-  const bore = L * 0.042;
+  const boreR = L * 0.042;
   const jacketR = L * 0.062;
   const brakeLen = L * 0.11;
   const muzzleReach = L + brakeLen;
@@ -116,7 +138,7 @@ export function createWeapon(barrelLength: number): WeaponRig {
   receiver.position.y = L * 0.12;
   recoiling.add(receiver);
 
-  const barrel = new THREE.Mesh(keep(new THREE.CylinderGeometry(bore, bore * 1.15, L, 10)), steel);
+  const barrel = new THREE.Mesh(keep(new THREE.CylinderGeometry(boreR, boreR * 1.15, L, 10)), steel);
   barrel.position.y = L * 0.5;
   recoiling.add(barrel);
 
@@ -209,15 +231,22 @@ export function createWeapon(barrelLength: number): WeaponRig {
   group.add(pintle);
   const legGeo = keep(new THREE.CylinderGeometry(L * 0.016, L * 0.022, 1, 6));
   legGeo.translate(0, -0.5, 0); // hang from the top, so scaling y sets the reach downward
+  const legSplay = 0.42;
+  const legTop = L * 0.16;
+  // Long enough to stand on the deck and no longer. A leg splayed by `legSplay` covers
+  // `cos(legSplay)` of its own length vertically, so the length that lands the foot on the surface
+  // is the remaining drop divided by that. `max` keeps a stubby leg rather than an inverted one if a
+  // caller ever mounts the gun lower than the collar it hangs from.
+  const legLen = Math.max(L * 0.05, (mountHeight - legTop) / Math.cos(legSplay));
   for (let i = 0; i < 3; i += 1) {
     const leg = new THREE.Mesh(legGeo, steel);
     // Two legs forward, one back: a tripod facing the way the gun does.
     const bearing = (i / 3) * Math.PI * 2 + Math.PI / 2;
-    leg.position.y = -L * 0.16;
+    leg.position.y = -legTop;
     leg.rotation.order = 'YXZ';
     leg.rotation.y = bearing;
-    leg.rotation.x = 0.42;
-    leg.scale.y = L * 0.5;
+    leg.rotation.x = legSplay;
+    leg.scale.y = legLen;
     group.add(leg);
   }
 
