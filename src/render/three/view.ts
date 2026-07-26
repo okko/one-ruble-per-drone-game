@@ -52,6 +52,9 @@ import { createSoldier, SOLDIER_H, soldierPoseFrom } from './soldier';
 import { FOG_FAR, FOG_NEAR, rigFor, sunDirectionFor } from './lighting';
 import { createSky } from './sky';
 import { createCity } from './city';
+import { createRooftop } from './rooftop';
+import { createWeapon } from './weapon';
+import { advanceRecoil, createRecoil, kickRecoil } from './recoil';
 import { loadDetailTextures, type DetailTextures } from './assets';
 import {
   createTierGovernor,
@@ -376,6 +379,14 @@ export function createThreeView(
   gunPivot.position.set(ax(post.x), ROOF_DECK_TOP_Y + GUN_PIVOT_H, TOWER_Z);
   scene.add(gunPivot);
 
+  // The gun itself lives in ./weapon: a receiver, a jacketed barrel, a belt and a tripod, with the
+  // recoil rig already wired. `BARREL_LEN` is still the one number that sets its scale, and the
+  // muzzle it reports is what the tracer offset below is measured from — so the flash and the first
+  // visible tracer come from the same point, which they did not when both were guessed separately.
+  const weapon = createWeapon(BARREL_LEN);
+  gunPivot.add(weapon.group);
+  const recoil = createRecoil();
+
   // The soldier is added to the SCENE, not to the gun. He used to be a child of `gunPivot`, which
   // meant he inherited the barrel's rotation and cartwheeled with the aim; he now stands on his own
   // feet beside the post and merely twists toward it (docs/areas/11-art-visual-style.md §3.4).
@@ -389,27 +400,18 @@ export function createThreeView(
   );
   soldier.group.position.copy(roofSpot);
 
-  const barrel = new THREE.Mesh(
-    new THREE.CylinderGeometry(BARREL_LEN * 0.045, BARREL_LEN * 0.045, BARREL_LEN, 8),
-    new THREE.MeshStandardMaterial({ color: colorOf('gunmetal'), flatShading: true }),
-  );
-  barrel.geometry.translate(0, BARREL_LEN / 2, 0); // pivot at one end
-  const barrelYaw = new THREE.Group();
-  barrelYaw.add(barrel);
-  gunPivot.add(barrelYaw);
-  const muzzle = new THREE.Mesh(
-    new THREE.SphereGeometry(BARREL_LEN * 0.13, 8, 6),
-    new THREE.MeshBasicMaterial({ color: colorOf('flashHot') }),
-  );
-  muzzle.visible = false;
-  barrelYaw.add(muzzle);
-  // A stubby mount under the pivot, so the gun stands on the deck rather than floating at his chest.
-  const mount = new THREE.Mesh(
-    new THREE.CylinderGeometry(SOLDIER_H * 0.1, SOLDIER_H * 0.16, GUN_PIVOT_H, 6),
-    new THREE.MeshStandardMaterial({ color: colorOf('gunmetalDk'), flatShading: true }),
-  );
-  mount.position.y = -GUN_PIVOT_H / 2;
-  gunPivot.add(mount);
+  const barrelYaw = weapon.yaw;
+
+  // ---- The dressing around the post ------------------------------------------------------------
+  const rooftop = createRooftop(scene, {
+    x: towerX,
+    z: TOWER_Z,
+    deckTopY: ROOF_DECK_TOP_Y,
+    width: TW,
+    depth: TD,
+    parapetHeight: PARAPET_H,
+    unit: SOLDIER_H,
+  });
 
   // ---- Who casts, and onto what -------------------------------------------------------------
   // The rooftop post is the ONLY shadow-casting region, matching the shadow camera set up above.
@@ -595,7 +597,8 @@ export function createThreeView(
   }
 
   let lastT = 0;
-  let muzzleTimer = 0;
+  /** The gun's cooldown as of the previous frame; a rise in it is a shot having been fired. */
+  let lastFireCooldown = 0;
   /** Wall clock at the previous frame, for the tier governor. 0 until the first frame has landed. */
   let lastFrameAt = 0;
 
@@ -703,9 +706,10 @@ export function createThreeView(
     // muzzle (barrel tip) is the visible source of fire; rotating +y·BARREL_LEN by aimZ gives its world
     // point, which the tracer blend below leans on so shots leave the barrel rather than the deck.
     gunPivot.visible = vs.mode === 'shooting';
-    const aimZ = -(c.aim.effectiveAngle + Math.PI / 2);    barrelYaw.rotation.z = aimZ;
-    const muzzleX = gunPivot.position.x - BARREL_LEN * Math.sin(aimZ);
-    const muzzleY = gunPivot.position.y + BARREL_LEN * Math.cos(aimZ);
+    const aimZ = -(c.aim.effectiveAngle + Math.PI / 2);
+    barrelYaw.rotation.z = aimZ;
+    const muzzleX = gunPivot.position.x - weapon.muzzleReach * Math.sin(aimZ);
+    const muzzleY = gunPivot.position.y + weapon.muzzleReach * Math.cos(aimZ);
     const muzzleZ = gunPivot.position.z;
     // Offset from where the sim spawns a shot (the firing column, mapped flat into the action plane) to
     // the actual muzzle. Tracers carry this offset at spawn and shed it linearly over FIRE_BLEND, so a
@@ -713,12 +717,14 @@ export function createThreeView(
     const fireOffX = muzzleX - ax(post.x);
     const fireOffY = muzzleY - ay(post.y);
     const fireOffZ = muzzleZ - (ACTION_Z + 0.2);
-    if (c.gun.firing && !c.gun.overheated && !c.gun.jammed) {
-      muzzleTimer = 0.05;
-      muzzle.position.set(0, BARREL_LEN, 0);
-    }
-    muzzleTimer = Math.max(0, muzzleTimer - dt);
-    muzzle.visible = muzzleTimer > 0;
+    // One kick per SHOT, not per firing frame. `fireCooldown` is reset upward by the sim the instant
+    // a round leaves, so a rise in it is the only per-shot edge the render side can see — and it is
+    // exact at every fire rate, which "firing && a timer" never was: at 12 rounds a second the old
+    // flash was simply on, continuously, and the gun never appeared to cycle.
+    if (c.gun.fireCooldown > lastFireCooldown + 1e-6) kickRecoil(recoil);
+    lastFireCooldown = c.gun.fireCooldown;
+    advanceRecoil(recoil, dt);
+    weapon.update(recoil, reducedFlash);
 
     // Projectiles. The sim flies them from the firing column (post) along the aim in arena 2D. The gun
     // stands on the roof at TOWER_Z while the drones fly in the ACTION_Z plane, so each tracer keeps the
@@ -807,6 +813,8 @@ export function createThreeView(
       soldier.dispose();
       skyView.dispose();
       city.dispose();
+      rooftop.dispose();
+      weapon.dispose();
       detail?.dispose();
       chain.dispose();
       renderer.dispose();

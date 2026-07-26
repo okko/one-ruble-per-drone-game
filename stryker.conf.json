@@ -17,6 +17,7 @@
     "src/render/three/lighting.ts",
     "src/render/three/texgen.ts",
     "src/render/three/city-layout.ts",
+    "src/render/three/recoil.ts",
     "!src/**/*.test.ts",
     "!src/test-support/**/*.ts"
   ],
