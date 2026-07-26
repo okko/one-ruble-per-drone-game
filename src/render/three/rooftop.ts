@@ -15,7 +15,21 @@ import { colorOf } from './theme';
  * run to run cannot be compared, and comparing frames is how the render gates work.
  */
 
-const SANDBAGS_PER_SIDE = 13;
+/**
+ * Spacing between sandbag centres along a rail, as a fraction of `unit`.
+ *
+ * A COUNT per side was the obvious thing and it was wrong: the deck is more than twice as wide as
+ * it is deep, so thirteen bags a side packed the two short rails shoulder to shoulder and strung the
+ * long back rail out into a dotted line of lumps floating over the parapet. Spacing is the property
+ * that has to be constant — the number of bags is whatever the rail is long enough to hold.
+ *
+ * It is set just under a bag's own width (`bagR * 1.375` gives the half-length, so a bag is about
+ * 0.30 units across) so neighbours touch and overlap slightly, which is how a heaped row reads as a
+ * wall rather than as beads on a string.
+ */
+const BAG_PITCH = 0.28;
+/** Fraction of each rail the bags are laid along, leaving the corners to the rails themselves. */
+const BAG_SPAN_FRACTION = 0.94;
 const BRASS_COUNT = 22;
 
 function hash(n: number): number {
@@ -72,18 +86,23 @@ export function createRooftop(scene: THREE.Scene, options: RooftopOptions): Roof
   // is a low-poly sphere rather than a box because the ROUNDNESS is the whole read: a row of boxes
   // on a wall is a wall, a row of lumps is sandbags.
   const bagGeo = keep(new THREE.SphereGeometry(1, 6, 4));
+  const bagR = unit * 0.11;
+  // How many bags each rail holds is derived from its own length, not shared between them — see
+  // BAG_PITCH. Two is the floor so a rail is never a single lonely bag.
   const sides = [
     { dx: 0, dz: -depth / 2, ax: 1, az: 0, span: width },
     { dx: -width / 2, dz: 0, ax: 0, az: 1, span: depth },
     { dx: width / 2, dz: 0, ax: 0, az: 1, span: depth },
-  ] as const;
+  ].map((side) => ({
+    ...side,
+    count: Math.max(2, Math.round((side.span * BAG_SPAN_FRACTION) / (BAG_PITCH * unit))),
+  }));
   const courses = 2;
-  const bagCount = sides.length * SANDBAGS_PER_SIDE * courses;
+  const bagCount = sides.reduce((total, side) => total + side.count * courses, 0);
   const bags = new THREE.InstancedMesh(bagGeo, burlap, bagCount);
   bags.frustumCulled = false;
   bags.castShadow = true;
   bags.receiveShadow = true;
-  const bagR = unit * 0.11;
   const quat = new THREE.Quaternion();
   const euler = new THREE.Euler();
   const pos = new THREE.Vector3();
@@ -92,14 +111,14 @@ export function createRooftop(scene: THREE.Scene, options: RooftopOptions): Roof
   let n = 0;
   for (let s = 0; s < sides.length; s += 1) {
     const side = sides[s];
-    if (!side) continue; // unreachable: `s` indexes a literal tuple, but the compiler cannot see it
+    if (!side) continue; // unreachable: `s` indexes an array built just above, sized by its own map
     for (let course = 0; course < courses; course += 1) {
-      for (let i = 0; i < SANDBAGS_PER_SIDE; i += 1) {
+      for (let i = 0; i < side.count; i += 1) {
         const seed = s * 977 + course * 131 + i;
         const r = hash(seed);
         // Odd courses are offset half a bag, the way anything stacked by hand ends up.
-        const t = (i + 0.5 + (course % 2) * 0.5) / SANDBAGS_PER_SIDE - 0.5;
-        const along = t * side.span * 0.94;
+        const t = (i + 0.5 + (course % 2) * 0.5) / side.count - 0.5;
+        const along = t * side.span * BAG_SPAN_FRACTION;
         pos.set(
           x + side.dx + side.ax * along + side.az * (r - 0.5) * bagR * 0.5,
           deckTopY + parapetHeight + bagR * (0.55 + course * 0.85),
