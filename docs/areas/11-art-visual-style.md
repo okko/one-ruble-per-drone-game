@@ -43,9 +43,10 @@ no other area ever talks to `three` directly or has to reason about cameras.
 - Drone gameplay stats/behaviour — **Gameplay Engine** (we supply the visuals and
   agree the type list with them).
 - Which HUD elements exist and where — **HUD & UI (10)**.
-- Producing final, finished art assets — an art-production task. Everything here is
-  authored **procedurally in code** today (see §3.3), so the game is always renderable
-  and no area is ever blocked waiting on assets.
+- Producing final, finished art assets — an art-production task. Geometry is authored
+  **procedurally in code**; surfaces are **generated at build time** by a script in
+  this repo (see §3.3). Nothing is hand-authored in a DCC tool, so the game is always
+  renderable and no area is ever blocked waiting on assets.
 
 ## 3. Requirements & mechanics
 
@@ -85,32 +86,80 @@ Rules:
 The day and night ramps are the only colours the renderer interpolates between; every
 other key is constant and reacts to light instead.
 
-### 3.3 Models & materials
+### 3.3 Models, materials & the asset pipeline
 
-All geometry is **authored procedurally in code** from three.js primitives — no glTF
-assets, no texture files, no loaders. This keeps the build asset-free and
-dependency-light, keeps everything under version control as readable TypeScript, and
-means the game is never in a half-rendered state waiting on an artist. Swapping in
-authored models later is a `world.ts` change and nothing else.
+**Geometry is authored procedurally in code** from three.js primitives. **Surfaces are
+generated at build time** by `scripts/gen-assets.mjs` into `public/gen/`, from the pure
+generators in `src/render/three/texgen.ts`.
 
-Materials are `MeshStandardMaterial` with low roughness variance ("PBR-lite"): the
-lighting rig carries the mood, materials just say what a thing is made of.
+The build-time split is the important part and it was a deliberate reversal of an
+earlier "no texture files at all" rule. Generating maps in the browser costs the player
+a main-thread stall on first load; generating them in a DCC tool costs a human and a
+binary blob nobody can review. Generating them from **reviewable, tested TypeScript at
+build time** costs neither: the recipe is source, the output is deterministic from a
+seed, and the runtime just fetches PNGs.
+
+Rules that keep this honest:
+
+- **No runtime texture synthesis.** Nothing generates surface pixels in the render loop
+  or at boot. (The one 32×32 particle dot in `particles.ts` is a shader input, not a
+  surface, and is exempt.)
+- **No image library and no three.js addons.** `scripts/png.mjs` is a dependency-free
+  PNG encoder in this repo, unit-tested against an independent decoder. `three/examples`
+  is off limits, which is why the geometry merge in `drones.ts` and the Kremlin star in
+  `city.ts` are hand-rolled.
+- **The asset set is budgeted and the budget is enforced.** `BUDGET_BYTES` fails the
+  build if the generated set exceeds it. It is 320 kB; the set is 47 kB.
+- **Textures are progressive enhancement.** `assets.ts` loads them after first paint and
+  applies them when they arrive. A missing, failed, or stale-version manifest is not an
+  error — the scene keeps its untextured materials. The low tier never requests them.
+- **The manifest is versioned.** `EXPECTED_VERSION` must match or the assets are
+  ignored, so a stale `public/gen/` from an old checkout cannot mis-tile a facade.
+
+Materials are `MeshStandardMaterial` with low roughness variance ("PBR-lite"). One hard
+constraint: **`metalness` stays at or below ~0.45 everywhere.** A near-1 metal has
+almost no diffuse term and needs an environment map to have anything to reflect; the low
+tier has none, so a "correct" metal renders black. Metals are faked with a lighter base
+colour instead.
 
 | Subject | Construction | Notes |
 |---|---|---|
 | Player's tower | Back + two side walls, per-storey floor slabs, emissive back-glow panel per floor | Deliberately **cut away** — the front face is omitted so the camera can drop inside. 32 storeys. |
 | Roof deck | Capping slab + low parapet rails | The firing post. Its top face is the ground plane for the soldier (§3.4). |
+| Rooftop props | Instanced sandbag emplacement, crates, spent brass, radio + antenna | `rooftop.ts`. Two instanced meshes carry the lot. |
 | Residents | Simple capsule figures on occupied floors | Read as presence, not portraiture. |
-| Moscow skyline | One tower per `content.combat.skyline.buildings` entry; a stack of slab meshes with an emissive window panel | `building.cut` hides slabs from the top — damage is literally geometry removed, repair restores it. |
-| Drones | Faceted low-poly bodies, scaled by `drone.radius`, tinted by class | Constant idle tumble so they read as airborne. |
+| Moscow skyline | **Derived** from `content.combat.skyline`: setbacks, cornices, crowns (dome / spire / Kremlin star), rooftop clutter | `city-layout.ts` is pure and computes the massing; `city.ts` draws it. One `InstancedMesh` per building for the facade, plus shared zone meshes for trim, domes, spires, stars and clutter. |
+| Skyline damage | `InstancedMesh.count` | Boxes are ordered by the storey they die with, so damage is a **count**, not a rebuild. Repair restores it. |
+| Drones | Six built silhouettes — quadcopter, hexacopter, delta wing, spiked octahedron, eight-rotor boss, bird | `drones.ts`. Bodies are pooled meshes; every rotor disc in the sky is one shared `InstancedMesh`. |
+| Explosions & impacts | Two point clouds (additive debris, normal-blended smoke) + a shockwave ring `InstancedMesh` | `vfx.ts` (pure simulation) + `particles.ts` (GL). Fixed slabs, round-robin overwrite, zero allocation per frame. |
 | Projectiles | Small emissive spheres | Pooled; see §3.9 for the muzzle-blend rule. |
-| Gun | Barrel cylinder on a yaw pivot + emissive muzzle sphere | Barrel pivots at one end; the muzzle is the visible source of fire. |
+| Gun | Jacketed barrel, muzzle brake, ammo can, belt of instanced brass, spade grips, tripod | `weapon.ts`. Recoil is a **damped spring solved analytically** in `recoil.ts`, kicked once per shot. |
 | Soldier | §3.4 | — |
-| Sky | Large inward-facing backdrop, tinted by the day/night ramp | Plus a sun/moon billboard tracking the cycle. |
+| Sky | Inward-facing gradient dome with a sun/moon disc, driven by the day cycle | `sky.ts`. **Must not** use `depthWrite: false`, `renderOrder = -1`, or `frustumCulled = false` — all three were measured as a large software-rasteriser overdraw regression on CI. |
 
-**Pooling is mandatory.** Drone and projectile meshes are allocated once and hidden
-when unused, never created per frame. Geometries and materials are shared across
-instances of the same class.
+**Pooling is mandatory.** Drone, projectile and particle storage is allocated once and
+hidden or truncated when unused, never created per frame. Geometries and materials are
+shared across instances of the same class.
+
+**Module map.** The renderer is split so that everything provable is pure and free of
+`three`, and the untestable GL layer is as thin as it can be made:
+
+| Pure (unit-tested; in the coverage and mutation gates) | GL (Playwright-smoked only) |
+|---|---|
+| `mapping.ts` — arena↔world | `view.ts` — the façade and the frame |
+| `camera-director.ts` — poses | `sky.ts`, `lighting.ts`, `post.ts` |
+| `theme.ts` — colours | `city.ts`, `rooftop.ts`, `weapon.ts` |
+| `quality.ts` — tier policy | `drones.ts`, `particles.ts` |
+| `texgen.ts` — surface generation | `assets.ts` — loading |
+| `city-layout.ts` — massing | `soldier.ts` (its maths is pure and gated) |
+| `recoil.ts` — the spring | |
+| `vfx.ts` — particles & shockwaves | |
+
+**Drone deaths are inferred, not announced.** The simulation emits no explosion event;
+a drone simply leaves the list — and it leaves for two reasons, shot down or arrived and
+detonated. From the roof both are explosions, so `view.ts` diffs the drawn set frame to
+frame and explodes whatever went missing. It stores its **own copy** of the position,
+never the sim's object, which is recycled.
 
 ### 3.4 The soldier (rooftop post)
 
@@ -243,13 +292,22 @@ All animation is **code-driven** — there are no keyframed clips.
 
 ### 3.10 Quality tiers & robustness
 
-| Tier | Post-processing | Shadows | Pixel ratio |
-|---|---|---|---|
-| High | Full chain | On | `min(dpr, 3)` |
-| Medium | Bloom + SMAA | On, reduced map | `min(dpr, 2)` |
-| Low | None | Off | `1` |
+The tier is a **policy record**, not a scattering of `if (tier === 'low')`. `quality.ts`
+owns `TierPolicy` and is pure and unit-tested; every consumer reads a flag off it.
 
-- Tier selection is automatic with a manual override in Settings; `reducedFlash`
+| Flag | High | Medium | Low |
+|---|---|---|---|
+| `post` | full chain | bloom only | off |
+| `bloom` / `ambientOcclusion` / `antialias` | on | bloom + AA | off |
+| `shadows` (rooftop only) | on | on | off |
+| `shadowMapSize` | 2048 | 1024 | — |
+| `environment` (generated IBL) | on | on | off |
+| `richSky` (`#ifdef RICH_SKY` branch) | on | on | off |
+| `detailTextures` (fetch `public/gen/`) | on | on | off |
+| `pixelRatioCap` | 3 | 2 | 1 |
+
+- Tier selection is **automatic at boot**, with an adaptive downgrade if frame time
+  runs long. There is no persisted setting and no Settings control; `reducedFlash`
   forces at most Medium.
 - **Never trade simulation rate for visuals.** The fixed-timestep loop is untouchable;
   degrade the picture instead.
@@ -259,8 +317,10 @@ All animation is **code-driven** — there are no keyframed clips.
   fails the strict no-console-error smokes on WebGL-less CI engines.
 - **Context loss** is handled, not ignored: stop rendering on `webglcontextlost`,
   rebuild on `webglcontextrestored`.
-- **Disposal:** `dispose()` releases geometries, materials, render targets, and the
-  post chain.
+- **Disposal:** `dispose()` releases geometries, materials, textures, render targets,
+  and the post chain.
+- **The post chain is a lazy chunk.** It is `import()`ed only when the tier affords it,
+  so the low tier never downloads it.
 
 ## 4. Public interface (TypeScript)
 
@@ -325,6 +385,62 @@ export interface Soldier {
   dispose(): void;
 }
 
+// src/render/three/quality.ts — PURE. The tier is a policy record, not scattered ifs.
+export type QualityTier = 'high' | 'medium' | 'low';
+export interface TierPolicy {
+  post: boolean; bloom: boolean; ambientOcclusion: boolean; antialias: boolean;
+  shadows: boolean; shadowMapSize: number;
+  environment: boolean; richSky: boolean; detailTextures: boolean;
+  pixelRatioCap: number;
+}
+export function policyFor(tier: QualityTier): TierPolicy;
+
+// src/render/three/texgen.ts — PURE. No `three`, no DOM: it returns plain byte arrays,
+// which is what lets the build script run it under node and the tests assert on it.
+export interface Bitmap { width: number; height: number; data: Uint8ClampedArray; }
+export interface SurfaceMaps { albedo: Bitmap; normal: Bitmap; roughness: Bitmap; }
+/** Value noise that TILES: the only kind usable on a repeating facade. */
+export function tilingValueNoise(size: number, frequency: number, seed: number): Float32Array;
+export function tilingFbm(size: number, octaves: number, seed: number): Float32Array;
+export function heightToNormal(height: Float32Array, size: number, strength: number): Bitmap;
+export function concrete(size: number, seed: number): SurfaceMaps;
+export function windowGrid(options: WindowGridOptions): Bitmap;
+
+// src/render/three/assets.ts — progressive enhancement. Never throws, never blocks.
+export const EXPECTED_VERSION: number;
+/** Resolves when (and if) the generated set is available. Missing assets are not an error. */
+export function loadDetail(policy: TierPolicy): Promise<DetailAssets | null>;
+
+// src/render/three/city-layout.ts — PURE. The massing of the skyline, derived.
+export type CrownKind = 'none' | 'dome' | 'spire' | 'star';
+export interface CityBox { x: number; y: number; w: number; h: number; d: number; diesAt: number; }
+export interface CityLayout { boxes: CityBox[]; crown: CityCrown; }
+/** Deterministic from the building's id, so a layout never changes between runs. */
+export function cityLayoutFor(id: string, width: number, height: number, storeys: number): CityLayout;
+/** How many boxes survive `surviving` storeys — damage is a COUNT, not a rebuild. */
+export function boxesAlive(boxes: readonly CityBox[], surviving: number): number;
+
+// src/render/three/recoil.ts — PURE. A damped spring, solved, not stepped.
+export interface RecoilState { offset: number; velocity: number; flash: number; shots: number; }
+export function createRecoil(): RecoilState;
+/** One shot fired. Called on the per-shot EDGE, never while `firing` is true. */
+export function kickRecoil(state: RecoilState): void;
+/** Exact analytic solution. Stepping this integrator made the kick frame-rate dependent. */
+export function advanceRecoil(state: RecoilState, dt: number): void;
+
+// src/render/three/vfx.ts — PURE. Fixed slabs, round-robin overwrite, no allocation.
+export const SPARK: number, SMOKE: number, EMBER: number;
+export interface ParticleField { /* parallel Float32Array slabs + alive/kind flags */ }
+export function createField(capacity: number): ParticleField;
+export function emitBurst(field: ParticleField, options: BurstOptions): number;
+export function advanceField(field: ParticleField, dt: number, gravity: number): void;
+/** 1 at birth falling to 0 at death; rides in the vertex colour, so one material fades many. */
+export function fadeOf(field: ParticleField, i: number): number;
+export function createRings(capacity: number): RingField;
+export function emitRing(rings: RingField, x: number, y: number, z: number, reach: number, life: number): void;
+export function ringRadius(rings: RingField, i: number): number;  // eased OUT: a wave snaps
+export function ringFade(rings: RingField, i: number): number;
+
 // src/render/three/view.ts — the façade every other area talks to.
 export interface ThreeView {
   resize(cssW: number, cssH: number): void;
@@ -342,15 +458,19 @@ export function createThreeView(canvas: HTMLCanvasElement, content: Content): Th
 
 ## 5. Data / content tables
 
-This area defines **no content tables** and ships **no asset files**. It consumes:
+This area defines **no content tables**. It ships **no hand-authored asset files**; the
+files in `public/gen/` are build outputs, reproducible from source by `npm run
+gen-assets` and never edited by hand. It consumes:
 
-- `content.combat.skyline` — building positions, widths, heights, storey counts.
+- `content.combat.skyline` — building positions, widths, heights, storey counts. The
+  city's massing (setbacks, cornices, crowns, clutter) is **derived** from these; the
+  balance table is unchanged and the silhouette is a pure function of it.
 - `content.combat.gun.pivot` — the arena-space firing column.
 - `content.economy.roster` — resident floors, for the tower's occupied interiors.
-- `content.drones` — the drone class list, for accent colours.
+- `content.drones` — the drone class list, for silhouettes and accent colours.
 
-Geometry and colour live in code (`three/world.ts`, `three/theme.ts`). There is no
-manifest, no atlas, and no `SpriteId` registry — all retired.
+Geometry and colour live in code. There is no atlas and no `SpriteId` registry — both
+retired. The generated texture set has a **versioned manifest**; see §3.3.
 
 ## 6. Persistence
 
@@ -409,6 +529,24 @@ Playwright matrix, not unit-tested.
 11. **No-WebGL fallback:** `createThreeView` with a canvas whose `getContext` returns
     `null` yields a working no-op view — every method callable, nothing thrown,
     **nothing logged to the console**.
+12. **Generated surfaces tile.** A texture that seams is worse than no texture, so the
+    noise tests assert on **scale-free** metrics — excess variance across the wrap edge
+    relative to the interior, and sign reversals per row — never on absolute pixel
+    values, which move whenever the generator is tuned.
+13. **The PNG encoder round-trips.** Every filter type it emits is decoded by an
+    independent decoder in the test and compared to the source bitmap. Filter numbering
+    is the trap: 3 is Average and 4 is Paeth, and only a real decoder catches a swap.
+14. **City damage is a count.** `boxesAlive` is monotonic in surviving storeys, returns
+    0 for a levelled building and every box for an untouched one; a layout is a pure
+    function of the building id.
+15. **Recoil is frame-rate independent.** Advancing the spring once by `dt` and twice by
+    `dt/2` agree to 9 decimals, and a 2-second gap does not destabilise it.
+16. **The particle field never grows and never allocates.** Emitting past capacity
+    overwrites rather than extends, the backing arrays are identity-stable across a
+    burst, and every particle retires within `life * 1.4`. Smoke rises; sparks fall.
+17. **Render cost is bounded** (Playwright, `compatibility.md §7`): draw calls and
+    geometry count stay under their ceilings, and the scene graph does not grow with
+    elapsed time.
 
 ## 9. Acceptance criteria / Definition of done
 
@@ -424,9 +562,14 @@ On top of the global DoD (architecture.md §9):
       `shooting` camera.
 - [ ] Day/night is driven by the single `daylight` value; tone mapping and the post
       chain are in place and skipped correctly on the low tier / `reducedFlash`.
-- [ ] No per-frame allocations in the render loop; drone and projectile meshes are
-      pooled; `dispose()` releases everything.
+- [ ] No per-frame allocations in the render loop; drone, projectile and particle
+      storage is pooled; `dispose()` releases everything.
+- [ ] Every pure module here is listed in `vitest.config.ts` `coverage.include` **and**
+      `stryker.conf.json` `mutate`. A pure module outside the gates is untested by
+      default, whatever its line coverage happens to say.
+- [ ] The generated asset set is under `BUDGET_BYTES` and the build fails if it is not.
 - [ ] Missing WebGL2 degrades silently to the no-op view with the DOM UI fully usable.
+- [ ] Missing or stale generated assets degrade silently to untextured materials.
 - [ ] All §8 tests authored and passing; `npm run check` green.
 
 ## 10. Open questions / risks
@@ -434,10 +577,14 @@ On top of the global DoD (architecture.md §9):
 - **Aim/framing coupling is the sharpest risk in this area.** Re-framing the
   `shooting` camera without re-deriving the aim camera silently misaligns every shot,
   and nothing but test §8.1/§8.6 will catch it. Never duplicate the pose by hand.
-- **Procedural geometry has a ceiling.** Code-authored primitives will carry the game
-  a long way, but a genuinely bespoke soldier or drone silhouette eventually wants an
-  authored model. The `world.ts` seam keeps that a contained change; adding a loader
-  is a lead decision (new asset pipeline, new bundle cost).
+- **Procedural geometry has a ceiling — partly RESOLVED.** Surfaces now come from a
+  build-time generator, which removed the flattest-looking half of the problem. Genuinely
+  bespoke silhouettes still want an authored model, and adding a **runtime** loader
+  remains a lead decision (new dependency, new bundle cost). The build-time seam is the
+  cheaper place to extend.
+- **The soldier is deliberately untouched.** `soldier.ts` is at 100% coverage and is
+  mutation-tested; its detail pass is a change of its own and must not ride along with a
+  scene-wide one.
 - **Mobile fill rate.** Bloom at high DPR is the most likely mobile regression. The
   tier system is the mitigation; the §7 perf budget in `compatibility.md` is the gate.
 - **Emoji variance — accepted, not resolved.** Status icons are system emoji in the

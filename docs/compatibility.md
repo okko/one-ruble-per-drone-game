@@ -144,11 +144,30 @@ without errors or unbounded growth. For the 3D renderer that means, per frame:
   reused. Allocating a `new THREE.Color()` per frame is a regression.
 - **Bounded draw calls.** Share geometries and materials; the scene-graph size is a
   function of the content tables, not of elapsed time.
+- **The ceilings are enforced, not advisory.** `tests/e2e/render-cost.spec.ts` reads
+  `window.__render.stats` mid-run and fails the build if the scene exceeds:
+
+  | Metric | Ceiling | Measured (high tier, mid-combat) |
+  |---|---|---|
+  | Draw calls | 400 | ~110 |
+  | Geometries | 200 | ~134 |
+
+  These are **ratchets**. They started at 2000/600 and came down as instancing landed;
+  they may be raised only with a measurement and a reason in the commit message. The
+  gap between measured and ceiling is deliberate headroom for a busy wave, not slack to
+  be spent.
+- **Instancing is how the ceilings are met**, not culling. One `InstancedMesh` per
+  skyline building's facade, one for every rotor disc in the sky, one for the shockwave
+  rings, and one point cloud each for hot debris and smoke. Damage and lifetime are
+  expressed as `.count`, which costs nothing.
 - **Dispose on teardown.** `ThreeView.dispose()` releases geometries, materials,
   textures, render targets, and the post-processing chain.
 - **Tier down, don't drop frames.** On a low tier, disable post-processing and shadows
   rather than reducing the simulation rate — the fixed-timestep loop is never traded
   away for visuals.
+- **No screenshot gate on the 3D scene** (§8). GPU rasterisation differs per engine and
+  a pixel diff of a lit scene is a flake generator; cost and structure are asserted
+  instead.
 
 ## 8. The cross-browser test matrix (mandatory)
 

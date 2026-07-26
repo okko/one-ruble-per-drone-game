@@ -146,13 +146,89 @@ describe('particle field', () => {
     expect(smoke.y[0] ?? 0).toBeGreaterThan(2);
   });
 
+  it('lifts smoke gently and drops debris hard: they are not the same force', () => {
+    // Smoke is buoyant, not anti-gravity. If it climbed as fast as debris falls, a burst
+    // would read as two symmetric sprays rather than as fire under a rising column.
+    const sparks = createField(4);
+    const smoke = createField(4);
+    emitBurst(sparks, burst({ count: 4, kind: SPARK, speed: 0, life: 5 }));
+    emitBurst(smoke, burst({ count: 4, kind: SMOKE, speed: 0, life: 5 }));
+    for (let i = 0; i < 40; i += 1) {
+      advanceField(sparks, 1 / 60, 9);
+      advanceField(smoke, 1 / 60, 9);
+    }
+    const fell = 2 - (sparks.y[0] ?? 0);
+    const rose = (smoke.y[0] ?? 0) - 2;
+    expect(rose).toBeGreaterThan(0);
+    expect(rose).toBeLessThan(fell);
+  });
+
+  it('carries every particle along its own velocity, on all three axes', () => {
+    // The integration is the whole simulation; everything else is decoration on top of it.
+    // Velocity is damped before the position is advanced, so the position after a step is
+    // exactly the position before plus the POST-drag velocity — which pins the order too.
+    // Six decimals, not more: the slabs are Float32Array and a round trip through one costs
+    // about eight significant digits.
+    const f = createField(8);
+    emitBurst(f, burst({ count: 4, speed: 6, life: 3 }));
+    const p0 = [f.x[0] ?? 0, f.y[0] ?? 0, f.z[0] ?? 0] as const;
+    const dt = 1 / 90;
+    advanceField(f, dt, 9);
+    expect(f.x[0] ?? 0).toBeCloseTo(p0[0] + (f.vx[0] ?? 0) * dt, 6);
+    expect(f.y[0] ?? 0).toBeCloseTo(p0[1] + (f.vy[0] ?? 0) * dt, 6);
+    expect(f.z[0] ?? 0).toBeCloseTo(p0[2] + (f.vz[0] ?? 0) * dt, 6);
+  });
+
+  it('drags the horizontal speed down every step', () => {
+    const f = createField(16);
+    emitBurst(f, burst({ count: 8, speed: 9, life: 3 }));
+    const before = Array.from(f.vx).map(Math.abs);
+    advanceField(f, 1 / 60, 0);
+    for (let i = 0; i < 8; i += 1) {
+      const was = before[i] ?? 0;
+      if (was < 1e-6) continue; // a particle fired straight up has nothing to slow
+      expect(Math.abs(f.vx[i] ?? 0)).toBeLessThan(was);
+    }
+  });
+
+  it('scatters a burst around the whole circle, not into one quadrant', () => {
+    const f = createField(64);
+    emitBurst(f, burst({ count: 48, speed: 5, rise: 0 }));
+    const quadrants = new Set<number>();
+    for (let i = 0; i < 48; i += 1) {
+      const vx = f.vx[i] ?? 0;
+      const vz = f.vz[i] ?? 0;
+      quadrants.add((vx >= 0 ? 1 : 0) + (vz >= 0 ? 2 : 0));
+    }
+    expect(quadrants.size).toBe(4);
+  });
+
+  it('varies particle size around the size it was given, without running away from it', () => {
+    const f = createField(64);
+    emitBurst(f, burst({ count: 48, size: 2 }));
+    let min = Infinity;
+    let max = -Infinity;
+    for (let i = 0; i < 48; i += 1) {
+      const s = f.size[i] ?? 0;
+      min = Math.min(min, s);
+      max = Math.max(max, s);
+    }
+    expect(min).toBeGreaterThan(2 * 0.5);
+    expect(max).toBeLessThan(2 * 1.5);
+    expect(max - min).toBeGreaterThan(2 * 0.3);
+  });
+
   it('ignores a zero or backwards step', () => {
     const f = createField(8);
     emitBurst(f, burst({ count: 2 }));
     const snapshot = Array.from(f.x);
+    const lives = Array.from(f.life);
     advanceField(f, 0, 9);
     advanceField(f, -1, 9);
     expect(Array.from(f.x)).toEqual(snapshot);
+    // A backwards step must not hand a particle its life back, or a paused tab would
+    // resume with debris that has been hanging in the air since before it was fired.
+    expect(Array.from(f.life)).toEqual(lives);
     expect(liveCount(f)).toBe(2);
   });
 

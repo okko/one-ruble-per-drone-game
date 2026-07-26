@@ -102,9 +102,17 @@ Area 00 wires these into `eslint.config.js`, `vitest.config.ts`, and a CI grep s
 ## 5. Mutation testing (anti-shallow-test gate)
 
 Add **StrykerJS** (`npm run test:mutation`) over the pure-logic dirs (`src/systems`,
-`src/content` validators, scoring, meters, economy) **and the pure presentation
-modules** listed in §3 (`mapping.ts`, `camera-director.ts`, `soldier.ts`,
-`menu-model.ts`).
+`src/content` validators, scoring, meters, economy) **and every pure presentation
+module**: `mapping.ts`, `camera-director.ts`, `soldier.ts`, `theme.ts`, `quality.ts`,
+`lighting.ts`, `texgen.ts`, `city-layout.ts`, `recoil.ts`, `vfx.ts`, and
+`menu-model.ts`.
+
+**Adding a pure module to `vitest.config.ts` `coverage.include` and to
+`stryker.conf.json` `mutate` is part of writing it, not a follow-up.** A pure module
+outside the gates is untested by default no matter what its line coverage says, and the
+whole reason the renderer is split the way it is (§11 of the art area) is so that the
+provable half can be gated.
+
 Mutation testing perturbs the
 *implementation* and checks that some test fails — directly catching tests that
 execute code without truly asserting its behavior, which is the dominant failure mode
@@ -114,7 +122,12 @@ regress. Runs on logic-touching PRs and nightly, not on the fast inner-loop chec
 
 Camera and mapping code is a particularly good mutation target: an off-by-one in a
 pose or a flipped sign in a coordinate transform is invisible in a coverage report
-and obvious to a mutant.
+and obvious to a mutant. So is anything simulated: the particle field reached 100%
+line coverage while a dozen mutants that broke the integration entirely still lived,
+because "the debris moved and then went away" is true of almost any arithmetic. What
+killed them was asserting the *relationship* — that position advances by exactly the
+post-drag velocity, that drag strictly reduces horizontal speed, that a backwards step
+cannot hand a particle its life back.
 
 ## 6. Determinism golden test
 
