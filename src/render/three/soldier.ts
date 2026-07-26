@@ -158,6 +158,7 @@ export function createSoldier(): Soldier {
   const coatMat = mat('uniform');
   const beltMat = mat('gunmetalDk');
   const skinMat = mat('skin');
+  const eyeMat = mat('ink');
   const hatMat = mat('uniformDk');
   const furMat = mat('smoke');
 
@@ -207,7 +208,12 @@ export function createSoldier(): Soldier {
     const arm = box(width * 0.24, coatH * 0.72, depth * 0.5, coatMat);
     arm.geometry.translate(0, -coatH * 0.36, 0); // pivot at the shoulder
     arm.position.set(sx * width * 0.5, shoulderY, 0);
-    arm.rotation.x = -0.95; // down and forward, toward the grips
+    // POSITIVE, and the sign is the whole point. A rotation of θ about x sends the arm's hanging
+    // −y down to (0, −cos θ, −sin θ), so only a positive θ carries the hands toward −z — the side
+    // the figure faces, where the gun and the city are. It was negative, which reached the same
+    // distance in the opposite direction and left him standing with both hands clasped behind his
+    // back while the gun in front of him fired by itself.
+    arm.rotation.x = 0.95; // down and forward, toward the grips
     torso.add(arm);
   }
 
@@ -219,6 +225,18 @@ export function createSoldier(): Soldier {
   const skull = box(headH * 0.78, headH, headH * 0.8, skinMat);
   skull.position.y = headH / 2;
   head.add(skull);
+
+  // Eyes. Two flat dark chips set just proud of the front face, high on the head so the fur band
+  // reads as a brim over them. They are the smallest thing in the scene that turns a shape into a
+  // person: at this distance a face is four or five pixels, and without them the head is a pink
+  // block. They are deliberately static — no blink, no gaze — because anything that moves up here
+  // draws the eye away from the drones, and a figure that stares steadily out at the city is the
+  // pose the whole rest of the model is already in.
+  for (const sx of [-1, 1]) {
+    const eye = box(headH * 0.15, headH * 0.11, headH * 0.05, eyeMat);
+    eye.position.set(sx * headH * 0.17, headH * 0.62, -headH * 0.41);
+    head.add(eye);
+  }
 
   const hat = new THREE.Mesh(
     new THREE.CylinderGeometry(headH * 0.5, headH * 0.5, hatH, 8),
