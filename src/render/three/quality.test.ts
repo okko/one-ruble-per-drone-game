@@ -152,6 +152,17 @@ describe('what a tier is allowed to spend', () => {
     expect(policyFor('low', plain).richSky).toBe(false);
   });
 
+  it('downloads the generated surface maps only where they will not cost frames', () => {
+    // Three extra samplers per surface, and a download the low tier would only use to slow itself.
+    expect(policyFor('high', plain).detailTextures).toBe(true);
+    expect(policyFor('medium', plain).detailTextures).toBe(true);
+    expect(policyFor('low', plain).detailTextures).toBe(false);
+  });
+
+  it('keeps surface detail under reducedFlash, which is about flashing and not about texture', () => {
+    expect(policyFor('high', { reducedFlash: true }).detailTextures).toBe(true);
+  });
+
   it('keeps the environment map when reducedFlash is set, because ambient light does not flash', () => {
     expect(policyFor('high', { reducedFlash: true }).environment).toBe(true);
   });

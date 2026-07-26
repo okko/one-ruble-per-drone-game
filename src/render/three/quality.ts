@@ -88,6 +88,15 @@ export interface TierPolicy {
    * transcendental terms are not, and were measured tripling frame time on a software rasteriser.
    */
   richSky: boolean;
+  /**
+   * Download and bind the generated albedo/normal/roughness maps.
+   *
+   * Three extra samplers per surface is real work on a software rasteriser, and normal mapping in
+   * particular is not close to free there. The low tier keeps the flat palette colours it has
+   * always had — and, because the fetch never starts, also skips ~48 kB it would only have used to
+   * make itself slower.
+   */
+  detailTextures: boolean;
   /** Upper bound on `devicePixelRatio`; the dominant cost lever on a phone. */
   pixelRatioCap: number;
 }
@@ -102,6 +111,7 @@ const POLICIES: Readonly<Record<Tier, TierPolicy>> = Object.freeze({
     shadowMapSize: 2048,
     environment: true,
     richSky: true,
+    detailTextures: true,
     pixelRatioCap: 3,
   },
   medium: {
@@ -113,6 +123,7 @@ const POLICIES: Readonly<Record<Tier, TierPolicy>> = Object.freeze({
     shadowMapSize: 1024,
     environment: true,
     richSky: true,
+    detailTextures: true,
     pixelRatioCap: 2,
   },
   low: {
@@ -124,6 +135,7 @@ const POLICIES: Readonly<Record<Tier, TierPolicy>> = Object.freeze({
     shadowMapSize: 0,
     environment: false,
     richSky: false,
+    detailTextures: false,
     pixelRatioCap: 1,
   },
 });

@@ -36,6 +36,7 @@ export default defineConfig({
         'src/render/three/theme.ts',
         'src/render/three/quality.ts',
         'src/render/three/lighting.ts',
+        'src/render/three/texgen.ts',
       ],
       // game-state.ts is pure interfaces (no runtime); test-support helpers are not product logic.
       exclude: ['**/*.test.ts', '**/__fixtures__/**', 'src/test-support/**'],

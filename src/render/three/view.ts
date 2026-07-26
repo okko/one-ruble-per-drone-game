@@ -53,6 +53,7 @@ import { createCameraDirector, type CameraState } from './camera-director';
 import { createSoldier, SOLDIER_H, soldierPoseFrom } from './soldier';
 import { FOG_FAR, FOG_NEAR, rigFor, sunDirectionFor } from './lighting';
 import { createSky } from './sky';
+import { loadDetailTextures, type DetailTextures } from './assets';
 import {
   createTierGovernor,
   isSoftwareRenderer,
@@ -138,6 +139,20 @@ interface SkylineTower {
  * close enough in to keep the shadow map's depth range tight.
  */
 const SUN_DISTANCE = 34;
+
+/**
+ * World units covered by one repeat of the concrete texture.
+ *
+ * Box UVs run 0..1 on every face whatever its size, so the tile count has to be chosen per surface
+ * or the two-metre roof deck and the thirty-metre tower shell would show the same aggregate at
+ * wildly different scales. Everything textured below derives its repeat from its own size and this
+ * one number, which is therefore the single knob for how coarse the concrete reads.
+ */
+const CONCRETE_TILE = 2.4;
+
+function tilesFor(size: number): number {
+  return Math.max(1, Math.round(size / CONCRETE_TILE));
+}
 
 export function createThreeView(
   canvas: HTMLCanvasElement,
@@ -268,6 +283,11 @@ export function createThreeView(
   ground.position.set(0, GROUND_Y, -20);
   scene.add(ground);
 
+  // Surfaces that get the generated concrete maps once (and if) they arrive, each with the tile
+  // count its own size calls for. Collected during construction rather than found by traversal
+  // afterwards, so what is textured is stated where the surface is built.
+  const concreteSurfaces: { material: THREE.MeshStandardMaterial; tiles: number }[] = [];
+
   // ---- Far layer: damageable Moscow skyline -------------------------------------------------
   // Towers rise from the ground to the world-Y the drones dive at (ay of each building's roof), so a
   // diving drone meets the tower top and the whole thing reads as one grounded skyline.
@@ -275,17 +295,24 @@ export function createThreeView(
   scene.add(skylineGroup);
   const towers: SkylineTower[] = [];
   const windowGeo = new THREE.PlaneGeometry(0.5, 0.5);
+  // One material per body colour rather than one per storey. Nothing has ever varied a slab's body
+  // material at runtime — damage hides whole slabs and only the window quads are recoloured — so a
+  // hundred identical materials bought nothing, and two make the concrete maps a two-line change.
+  const slabMats = new Map<string, THREE.MeshStandardMaterial>();
   for (const b of content.combat.skyline.buildings) {
     const roofY = ay(content.combat.skyline.groundY - b.height); // world height (drones target this)
     const slabH = (roofY - GROUND_Y) / b.stories;
     const w = b.width * AS;
     const slabs: THREE.Mesh[] = [];
-    const body = colorOf(b.id % 2 === 0 ? 'concrete' : 'concreteDk');
+    const bodyKey: WorldColorKey = b.id % 2 === 0 ? 'concrete' : 'concreteDk';
+    let bodyMat = slabMats.get(bodyKey);
+    if (!bodyMat) {
+      bodyMat = new THREE.MeshStandardMaterial({ color: colorOf(bodyKey), flatShading: true });
+      slabMats.set(bodyKey, bodyMat);
+      concreteSurfaces.push({ material: bodyMat, tiles: tilesFor(w) });
+    }
     for (let s = 0; s < b.stories; s++) {
-      const slab = new THREE.Mesh(
-        new THREE.BoxGeometry(w, slabH * 0.96, w * 0.7),
-        new THREE.MeshStandardMaterial({ color: body, flatShading: true }),
-      );
+      const slab = new THREE.Mesh(new THREE.BoxGeometry(w, slabH * 0.96, w * 0.7), bodyMat);
       slab.position.set(ax(b.x), GROUND_Y + slabH * (s + 0.5), SKYLINE_Z);
       // Lit windows on the camera-facing side (emissive so night reads).
       const win = new THREE.Mesh(
@@ -316,6 +343,7 @@ export function createThreeView(
   const towerX = TOWER_X;
   // Back + side walls (front omitted → the cut-away reveals the floors).
   const wallMat = new THREE.MeshStandardMaterial({ color: colorOf('concreteDk'), flatShading: true });
+  concreteSurfaces.push({ material: wallMat, tiles: tilesFor(ROOF_Y) });
   const back = new THREE.Mesh(new THREE.BoxGeometry(TW, ROOF_Y, 0.2), wallMat);
   back.position.set(towerX, GROUND_Y + ROOF_Y / 2, TOWER_Z - TD / 2);
   towerGroup.add(back);
@@ -365,13 +393,13 @@ export function createThreeView(
 
   // Roof deck capping the top floor (the rooftop the soldier stands on) + a low sandbag parapet. Its
   // top face is ROOF_DECK_TOP_Y — the surface everything on the roof is placed against.
-  const roofDeck = new THREE.Mesh(
-    new THREE.BoxGeometry(TW, ROOF_DECK_THICKNESS, TD),
-    new THREE.MeshStandardMaterial({ color: colorOf('concrete'), flatShading: true }),
-  );
+  const roofDeckMat = new THREE.MeshStandardMaterial({ color: colorOf('concrete'), flatShading: true });
+  concreteSurfaces.push({ material: roofDeckMat, tiles: tilesFor(TW) });
+  const roofDeck = new THREE.Mesh(new THREE.BoxGeometry(TW, ROOF_DECK_THICKNESS, TD), roofDeckMat);
   roofDeck.position.set(towerX, ROOF_DECK_Y, TOWER_Z);
   towerGroup.add(roofDeck);
   const parapetMat = new THREE.MeshStandardMaterial({ color: colorOf('uniformDk'), flatShading: true });
+  concreteSurfaces.push({ material: parapetMat, tiles: tilesFor(TW) });
   // Waist-high on the soldier. Anything taller hides the man the game is about.
   const PARAPET_H = SOLDIER_H * 0.55;
   const parapetRails: THREE.Mesh[] = [];
@@ -497,6 +525,40 @@ export function createThreeView(
   const actionPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), -ACTION_Z);
   let cssW = 1;
   let cssH = 1;
+
+  // ---- Generated surface detail, if it turns up -----------------------------------------------
+  // The world above is complete and correct with nothing but its palette colours, exactly as it was
+  // before this existed. The build-time textures are layered on afterwards if they arrive; if they
+  // do not, or if the tier says they are not worth their cost, the game is a little plainer and
+  // nothing else. Presentation is allowed to arrive late; it is never allowed to hold up a frame.
+  let detail: DetailTextures | null = null;
+  let disposed = false;
+
+  function applyDetail(textures: DetailTextures): void {
+    for (const { material, tiles } of concreteSurfaces) {
+      const set = textures.concrete(tiles);
+      material.map = set.map;
+      material.normalMap = set.normalMap;
+      material.roughnessMap = set.roughnessMap;
+      // Flat shading and a normal map are in direct conflict: flat shading discards the interpolated
+      // normal the map exists to perturb. Now that there is real surface detail, it is the better of
+      // the two, so it wins. (Box faces are flat in the geometry anyway, so silhouettes do not move.)
+      material.flatShading = false;
+      material.needsUpdate = true;
+    }
+  }
+
+  if (policy.detailTextures) {
+    void loadDetailTextures(renderer.capabilities.getMaxAnisotropy()).then((textures) => {
+      if (textures === null) return;
+      if (disposed) {
+        textures.dispose(); // the view went away while the fetch was in flight
+        return;
+      }
+      detail = textures;
+      applyDetail(textures);
+    });
+  }
 
   // ---- The post chain, and the tier it belongs to --------------------------------------------
   // The chain starts as a direct render and is UPGRADED once its chunk arrives. `./post` pulls in the
@@ -805,10 +867,12 @@ export function createThreeView(
     },
     dispose(): void {
       // Invalidate any post chunk still in flight, so it cannot build a composer over a disposed
-      // renderer after we have gone.
+      // renderer after we have gone. `disposed` does the same for the texture fetch.
       chainToken += 1;
+      disposed = true;
       soldier.dispose();
       skyView.dispose();
+      detail?.dispose();
       chain.dispose();
       renderer.dispose();
       scene.traverse((o) => {
