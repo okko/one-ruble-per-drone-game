@@ -125,18 +125,28 @@ The soldier is the emotional anchor of the frame and has hard placement requirem
    with it. His **body yaw** follows the aim direction, damped and clamped to a
    plausible human range; his vertical axis stays vertical.
 3. **He is a recognisable human figure**, not a placeholder solid: boots, legs,
-   greatcoat torso, arms reaching to the gun grips, head, and the ushanka. Roughly
-   1.8 world units tall — read the storey height from the tower, never hard-code a
-   scale factor that a tower change would invalidate.
+   greatcoat torso, arms reaching to the gun grips, head, and the ushanka. He is
+   sized **against the tower he stands on**, not against an assumed metre: 32 storeys
+   of `STORY_H` make one world unit about 3.3 m, so a man is a little over half a
+   unit (`SOLDIER_H`). Every proportion of the figure — and of the gun, the parapet,
+   and the residents indoors — is a fraction of `SOLDIER_H`, so re-scaling the world
+   is one edit. Sizing him in assumed metres is how the rooftop ended up with an
+   eight-metre conscript.
 4. **He is posed by state**, carrying over the four states the retired sprite set had:
    `idle` (settled, slow breathing), `fire` (braced, recoil kick), `tired` (slumped
    shoulders, head dipping — driven by the sleep meter), `crisis` (tense, jittery —
-   driven by any meter in crisis). Transitions are damped, never snapped.
+   driven by any meter in crisis). Transitions are damped, never snapped. Idle motion
+   only ever settles his weight *downward*: nothing may lift his boots off the deck.
 5. **He is always somewhere legible.** In interior mode he is *inside the building*
    on the floor being visited — he walked down there — and the rooftop post correctly
    shows an unattended gun. He is never simply switched invisible.
 6. **The camera must show him.** The `shooting` pose is framed over his shoulder so
-   he and the parapet anchor the foreground with the skyline beyond (§3.7).
+   he and the parapet anchor the foreground with the skyline beyond (§3.7). This is
+   only possible because his tower sits **in front of** the action plane
+   (`TOWER_Z > ACTION_Z`): the camera has to stand ~19 units back to frame a 34-unit
+   arena, and a half-unit man at that range is a speck. Pulling his rooftop toward
+   the lens is what buys him roughly a fifth of the frame height. Everything in play
+   maps above the roofline, so the near tower never occludes the playfield.
 
 ### 3.5 Lighting & day/night
 
@@ -274,20 +284,45 @@ export const ARENA_H = 216;
                                   export function ay(y: number): number;
 /** World (x,y) on the action plane → arena coordinate. Exact inverse of ax/ay. */
 export function toArena(worldX: number, worldY: number): Vec2;
+/** The rooftop surface the soldier stands on, derived from the deck slab. */
+export const ROOF_DECK_TOP_Y: number;
+/** The arena's world extents — what the shooting camera has to cover. */
+export const ARENA_TOP_Y: number, ARENA_BOTTOM_Y: number, ARENA_MID_Y: number, ARENA_HALF_W: number;
 
 // src/render/three/camera-director.ts — the ONLY owner of camera poses.
 export type CameraState = 'menu' | 'intro' | 'shooting' | 'interior' | 'pause';
 export interface CameraPose { eye: Vec3; look: Vec3; fov: number; }
-/** PURE: the canonical pose for a state at normalised progress t ∈ [0,1]. */
-export function poseFor(state: CameraState, t: number, ctx: PoseContext): CameraPose;
-/** PURE: eased blend between two poses. */
-export function blendPose(a: CameraPose, b: CameraPose, k: number): CameraPose;
+/** PURE: the resting pose for a state. */
+export function poseFor(state: CameraState, ctx: PoseContext): CameraPose;
+/** PURE: linear blend between two poses. */
+export function blendPose(a: CameraPose, b: CameraPose, t: number): CameraPose;
+/** PURE: frame-rate-independent damping, `1 - exp(-rate * dt)`. */
+export function damping(rate: number, dt: number): number;
 export interface CameraDirector {
-  /** Request a state; the director eases into it. `intro` restarts its crane. */
-  setState(state: CameraState): void;
-  update(dt: number, ctx: PoseContext): void;
+  readonly state: CameraState;
+  readonly pose: CameraPose;
   /** The canonical, never-moving `shooting` pose the aim raycast uses. */
   readonly aimPose: CameraPose;
+  /** Request a state; the director eases into it unless told to cut. */
+  setState(state: CameraState, opts?: { immediate?: boolean }): void;
+  update(dt: number, ctx: PoseContext): void;
+}
+
+// src/render/three/soldier.ts — the figure, and the maths that poses him.
+/** Total height, boots to ushanka. Every proportion is a fraction of this. */
+export const SOLDIER_H: number;
+/** How far his torso may twist to follow the aim. He cannot spin with the barrel. */
+export const BODY_YAW_LIMIT: number;
+export type SoldierPose = 'idle' | 'fire' | 'tired' | 'crisis';
+export function soldierPoseFrom(mood: SoldierMood): SoldierPose;   // PURE
+export function targetsFor(pose: SoldierPose): SoldierPoseTargets;  // PURE
+export function bodyYawFor(aimAngle: number): number;               // PURE, clamped
+export interface Soldier {
+  /** Added to the SCENE, never to the gun. Origin is the sole of his boots. */
+  readonly group: THREE.Group;
+  readonly height: number;
+  update(u: SoldierUpdate): void;
+  dispose(): void;
 }
 
 // src/render/three/view.ts — the façade every other area talks to.
@@ -351,7 +386,7 @@ Playwright matrix, not unit-tested.
 2. **Mapping anchors:** the firing post maps to the roof height, and arena x-centre
    maps to world x-origin — pinning the two anchors the whole scene hangs off.
 3. **Camera poses are total:** `poseFor` returns a finite, well-formed pose for every
-   `CameraState` and for `t` at 0, 0.5, and 1 — no NaN, no zero `fov`.
+   `CameraState` — no NaN, no zero `fov`, eye never coincident with look.
 4. **Pose blending:** `blendPose(a, b, 0) === a`, `blendPose(a, b, 1) === b`, and
    intermediate values are bounded by the endpoints per component.
 5. **Director transitions:** `setState` eases rather than snaps (the pose after one
@@ -359,14 +394,19 @@ Playwright matrix, not unit-tested.
    the crane from the beginning.
 6. **Aim pose is stable:** `aimPose` is unchanged after the director has been driven
    through `menu`, `interior`, and `pause` — the guarantee that aiming cannot drift.
-7. **Soldier placement:** the soldier's feet sit on the roof-deck top face (computed
-   from the deck geometry, not a literal), and his transform does **not** inherit the
-   gun's barrel rotation.
-8. **Damping is frame-rate independent:** stepping the damping helper once with `dt`
+7. **The shooting frustum covers the whole arena.** All four arena corners on the
+   action plane are inside a real `PerspectiveCamera` built from the `shooting` pose
+   at 16:9. Tightening the framing for looks must never make part of the playfield
+   unaimable.
+8. **Soldier placement:** the soldier's feet sit on the roof-deck top face (computed
+   from the deck geometry, not a literal) in every pose at every point in the idle
+   cycle, and his transform does **not** inherit the gun's barrel rotation — his yaw
+   is clamped to `BODY_YAW_LIMIT` for any aim angle whatsoever.
+9. **Damping is frame-rate independent:** stepping the damping helper once with `dt`
    and twice with `dt/2` converge within tolerance.
-9. **Theme integrity:** `Object.isFrozen(THEME)`; every value matches
-   `/^#[0-9a-f]{6}$/i`.
-10. **No-WebGL fallback:** `createThreeView` with a canvas whose `getContext` returns
+10. **Theme integrity:** `Object.isFrozen(THEME)`; every value matches
+    `/^#[0-9a-f]{6}$/i`.
+11. **No-WebGL fallback:** `createThreeView` with a canvas whose `getContext` returns
     `null` yields a working no-op view — every method callable, nothing thrown,
     **nothing logged to the console**.
 

@@ -18,8 +18,10 @@
  */
 import {
   ACTION_Z,
+  ARENA_MID_Y,
   floorCentreY,
   GROUND_Y,
+  ROOF_DECK_TOP_Y,
   ROOF_Y,
   TOWER_X,
   TOWER_Z,
@@ -50,7 +52,7 @@ export interface PoseContext {
   readonly time: number;
 }
 
-const BASE_FOV = 60;
+const BASE_FOV = 74;
 
 /** How fast the camera settles into each state, in units of 1/second. */
 const BLEND_RATE: Record<CameraState, number> = {
@@ -102,28 +104,33 @@ export function poseFor(state: CameraState, ctx: PoseContext): CameraPose {
       };
 
     case 'shooting':
-      // Over the soldier's shoulder: he sits in the near foreground on his roof,
-      // the grounded skyline fills the mid-frame, drones dive from the sky.
+      // Over the soldier's shoulder. The camera sits just above his roof deck and
+      // looks UP and OUT at the drone field: he and his gun fill the lower
+      // foreground at roughly a fifth of the frame height, the tower falls away
+      // below the frame, and the whole arena still fits above him — which it must,
+      // or part of the playfield becomes unaimable. These numbers are fitted, not
+      // guessed; the frustum-coverage test in the spec file is what holds them.
       return {
-        eye: { x: 1.6, y: ROOF_Y + 4.2, z: ACTION_Z + 11 },
-        look: { x: 0, y: ROOF_Y + 2.2, z: -14 },
+        eye: { x: 1.1, y: ROOF_DECK_TOP_Y + 0.6, z: TOWER_Z + 3 },
+        look: { x: 0, y: ARENA_MID_Y - 1, z: ACTION_Z },
         fov: BASE_FOV,
       };
 
     case 'interior':
-      // Inside, level with the floor being visited.
+      // Inside, level with the floor being visited, close enough that the soldier
+      // and the resident are people rather than specks.
       return {
-        eye: { x: TOWER_X, y: floorCentreY(ctx.floor) + 0.7, z: TOWER_Z + 9 },
+        eye: { x: TOWER_X, y: floorCentreY(ctx.floor) + 0.4, z: TOWER_Z + 4.5 },
         look: { x: TOWER_X, y: floorCentreY(ctx.floor), z: TOWER_Z },
-        fov: 52,
+        fov: 45,
       };
 
     case 'pause':
-      // Pull back and up from the post: the action is still visible, but the
-      // player is clearly no longer behind the gun.
+      // Pull back and up off the post: the action is still visible, but the player
+      // is clearly no longer behind the gun.
       return {
-        eye: { x: 8, y: ROOF_Y + 9, z: ACTION_Z + 20 },
-        look: { x: 0, y: ROOF_Y + 1, z: -10 },
+        eye: { x: 5, y: ROOF_Y + 5.5, z: TOWER_Z + 9 },
+        look: { x: 0, y: ROOF_Y + 3, z: TOWER_Z },
         fov: 50,
       };
   }

@@ -48,13 +48,17 @@ export const ROOF_DECK_TOP_Y = ROOF_Y + ROOF_DECK_THICKNESS;
 
 /** Depth of the plane the drones, projectiles, and aim raycast live on. */
 export const ACTION_Z = 0;
-/** Depth of the far Moscow skyline. */
+/** Depth of the far Moscow skyline the drones dive at. */
 export const SKYLINE_Z = -16;
 /**
- * Depth of the soldier's tower. Behind the action plane, so the soldier stands
- * in front of it on the roof and the cut-away face still opens to the camera.
+ * Depth of the soldier's tower — in FRONT of the action plane, nearest the camera.
+ *
+ * This is what makes the soldier read. The arena is 34 world units wide, so a camera that frames all
+ * of it sits ~18 units back; a 0.6-unit man at that distance is a speck. Putting his rooftop several
+ * units nearer the lens makes him a foreground figure while the drone field stays fully visible
+ * behind him. Everything in play maps ABOVE the roofline, so the near tower never occludes it.
  */
-export const TOWER_Z = -3.5;
+export const TOWER_Z = 13;
 
 /** Footprint of the soldier's tower. */
 export const TOWER_W = 60 * AS;
@@ -95,3 +99,16 @@ export function floorSlabY(floor: number): number {
 export function floorCentreY(floor: number): number {
   return floorSlabY(floor) + STORY_H / 2;
 }
+
+// ---- Arena extents in world space ----------------------------------------
+// The camera has to frame all of this, or part of the playfield becomes
+// unaimable. Derived rather than written down (see camera-director).
+
+/** World y of the top edge of the arena. */
+export const ARENA_TOP_Y = ay(0);
+/** World y of the bottom edge of the arena. */
+export const ARENA_BOTTOM_Y = ay(ARENA_H);
+/** World y of the arena's centre. */
+export const ARENA_MID_Y = (ARENA_TOP_Y + ARENA_BOTTOM_Y) / 2;
+/** World x of the arena's right edge (it is symmetric about x = 0). */
+export const ARENA_HALF_W = (ARENA_W * AS) / 2;

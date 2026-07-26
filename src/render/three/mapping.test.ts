@@ -2,8 +2,12 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ACTION_Z,
+  ARENA_BOTTOM_Y,
   ARENA_CX,
   ARENA_H,
+  ARENA_HALF_W,
+  ARENA_MID_Y,
+  ARENA_TOP_Y,
   ARENA_W,
   AS,
   ax,
@@ -90,10 +94,18 @@ describe('tower geometry', () => {
     expect(floorCentreY(5) - floorCentreY(4)).toBeCloseTo(STORY_H, 12);
   });
 
-  it('keeps the tower behind the action plane and in front of the skyline', () => {
-    // The soldier stands in front of his tower, and the skyline is further out
-    // still. Collapsing this ordering flattens the whole shot.
-    expect(TOWER_Z).toBeLessThan(ACTION_Z);
-    expect(SKYLINE_Z).toBeLessThan(TOWER_Z);
+  it('keeps the tower in front of the action plane, and the skyline behind it', () => {
+    // Near tower, then the drone field, then the city. The soldier can only read
+    // as a foreground figure if his roof is nearer the lens than what he shoots at.
+    expect(TOWER_Z).toBeGreaterThan(ACTION_Z);
+    expect(SKYLINE_Z).toBeLessThan(ACTION_Z);
+  });
+
+  it('keeps everything in play above the roofline, so the near tower cannot occlude it', () => {
+    // The tower now sits between the camera and the drones, so this is load-bearing.
+    expect(ARENA_BOTTOM_Y).toBeLessThan(ROOF_Y);
+    expect(ARENA_TOP_Y).toBeGreaterThan(ROOF_DECK_TOP_Y);
+    expect(ARENA_MID_Y).toBeCloseTo((ARENA_TOP_Y + ARENA_BOTTOM_Y) / 2, 12);
+    expect(ARENA_HALF_W).toBeCloseTo((ARENA_W * AS) / 2, 12);
   });
 });

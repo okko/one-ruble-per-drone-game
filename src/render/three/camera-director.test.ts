@@ -1,3 +1,4 @@
+import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -9,7 +10,14 @@ import {
   type CameraState,
   type PoseContext,
 } from './camera-director';
-import { floorCentreY, ROOF_Y } from './mapping';
+import {
+  ACTION_Z,
+  ARENA_BOTTOM_Y,
+  ARENA_HALF_W,
+  ARENA_TOP_Y,
+  floorCentreY,
+  ROOF_Y,
+} from './mapping';
 
 const ALL_STATES: CameraState[] = ['menu', 'intro', 'shooting', 'interior', 'pause'];
 
@@ -50,6 +58,29 @@ describe('poseFor', () => {
     expect(pose.look.z).toBeLessThan(pose.eye.z);
   });
 
+  it('keeps the ENTIRE arena inside the shooting frustum', () => {
+    // The player aims by pointing at the screen. Any corner of the arena that
+    // falls outside this frustum is a corner they cannot reach — so tightening
+    // the framing for looks must never cost coverage. Checked with a real
+    // camera rather than trigonometry so it cannot be fudged.
+    const pose = poseFor('shooting', ctx());
+    const cam = new THREE.PerspectiveCamera(pose.fov, 16 / 9, 0.1, 400);
+    cam.position.set(pose.eye.x, pose.eye.y, pose.eye.z);
+    cam.lookAt(pose.look.x, pose.look.y, pose.look.z);
+    cam.updateMatrixWorld(true);
+    cam.updateProjectionMatrix();
+
+    const frustum = new THREE.Frustum().setFromProjectionMatrix(
+      new THREE.Matrix4().multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse),
+    );
+
+    for (const x of [-ARENA_HALF_W, 0, ARENA_HALF_W]) {
+      for (const y of [ARENA_BOTTOM_Y, ARENA_TOP_Y]) {
+        expect(frustum.containsPoint(new THREE.Vector3(x, y, ACTION_Z))).toBe(true);
+      }
+    }
+  });
+
   it('starts the intro low and ends the crane high at the post', () => {
     const intro = poseFor('intro', ctx());
     const shooting = poseFor('shooting', ctx());
@@ -79,6 +110,16 @@ describe('poseFor', () => {
     const paused = poseFor('pause', ctx());
     expect(paused.eye.y).toBeGreaterThan(shooting.eye.y);
     expect(paused.eye.z).toBeGreaterThan(shooting.eye.z);
+  });
+
+  it('gets close enough inside for people to read as people', () => {
+    const inside = poseFor('interior', ctx());
+    const shooting = poseFor('shooting', ctx());
+    // A storey is under a world unit tall, so the interior camera has to be near.
+    expect(Math.abs(inside.eye.z - inside.look.z)).toBeLessThan(
+      Math.abs(shooting.eye.z - shooting.look.z),
+    );
+    expect(inside.fov).toBeLessThan(shooting.fov);
   });
 });
 

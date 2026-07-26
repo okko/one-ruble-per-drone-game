@@ -50,6 +50,7 @@ import {
   TOWER_Z,
 } from './mapping';
 import { createCameraDirector, type CameraState } from './camera-director';
+import { createSoldier, SOLDIER_H, soldierPoseFrom } from './soldier';
 
 export interface ThreeView {
   /** Resize the renderer to the CSS viewport (rendered at the device's native pixel ratio). */
@@ -225,14 +226,17 @@ export function createThreeView(canvas: HTMLCanvasElement, content: Content): Th
     glow.position.set(towerX, y + STORY_H / 2, TOWER_Z - TD / 2 + 0.12);
     towerGroup.add(glow);
     floorHi[f] = glow;
-    // A resident marker (little figure) on occupied floors.
+    // A resident marker (little figure) on occupied floors, the same size as the soldier so the
+    // building reads at a consistent human scale.
     const occ = occupantByFloor.get(f);
     if (occ) {
+      const r = SOLDIER_H * 0.16;
+      const body = SOLDIER_H - 2 * r;
       const fig = new THREE.Mesh(
-        new THREE.CapsuleGeometry(STORY_H * 0.16, STORY_H * 0.4, 4, 8),
+        new THREE.CapsuleGeometry(r, body, 4, 8),
         new THREE.MeshStandardMaterial({ color: col('skin'), flatShading: true }),
       );
-      fig.position.set(towerX - TW * 0.28, y + STORY_H * 0.42, TOWER_Z + TD * 0.18);
+      fig.position.set(towerX - TW * 0.28, y + SOLDIER_H / 2, TOWER_Z + TD * 0.18);
       towerGroup.add(fig);
     }
   }
@@ -246,13 +250,15 @@ export function createThreeView(canvas: HTMLCanvasElement, content: Content): Th
   roofDeck.position.set(towerX, ROOF_DECK_Y, TOWER_Z);
   towerGroup.add(roofDeck);
   const parapetMat = new THREE.MeshStandardMaterial({ color: col('uniformDk'), flatShading: true });
+  // Waist-high on the soldier. Anything taller hides the man the game is about.
+  const PARAPET_H = SOLDIER_H * 0.55;
   for (const [dx, dz, w, d] of [
     [0, -TD / 2, TW, 0.25],
     [-TW / 2, 0, 0.25, TD],
     [TW / 2, 0, 0.25, TD],
   ] as const) {
-    const rail = new THREE.Mesh(new THREE.BoxGeometry(w, 0.9, d), parapetMat);
-    rail.position.set(towerX + dx, ROOF_DECK_TOP_Y + 0.45, TOWER_Z + dz);
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(w, PARAPET_H, d), parapetMat);
+    rail.position.set(towerX + dx, ROOF_DECK_TOP_Y + PARAPET_H / 2, TOWER_Z + dz);
     towerGroup.add(rail);
   }
 
@@ -260,10 +266,14 @@ export function createThreeView(canvas: HTMLCanvasElement, content: Content): Th
   // The whole post sits on the deck at the tower depth (TOWER_Z), centred on the firing column
   // (ax(pivot.x) == towerX == 0). It fires OUT into the action plane (ACTION_Z) where the drones are;
   // the projectile loop below reconciles tracers from this muzzle into that plane (see FIRE_BLEND).
+  //
+  // Everything here is sized against SOLDIER_H. One world unit is roughly 3.3 m (32 storeys of
+  // STORY_H make the tower), so the gun is a ~3 m barrel on a chest-high mount — a weapon a man can
+  // stand behind, not the eight-metre prop that used to sit here.
   const post = content.combat.gun.pivot; // arena-space firing column the sim spawns projectiles from
-  const BARREL_LEN = 2.4; // barrel length & muzzle reach (tip distance from the yaw pivot)
-  /** Height of the gun's yaw pivot above the roof deck's top face. */
-  const GUN_PIVOT_H = 0.5;
+  const BARREL_LEN = SOLDIER_H * 1.55; // barrel length & muzzle reach (tip distance from the yaw pivot)
+  /** Height of the gun's yaw pivot above the roof deck's top face — the soldier's chest. */
+  const GUN_PIVOT_H = SOLDIER_H * 0.62;
   // Arena units over which a tracer sheds the muzzle offset and settles into the action plane. Spread
   // across the whole engagement range (gun→arena-top is ~196) so the depth correction is a shallow,
   // straight diagonal rather than a sharp z-step right off the barrel — the join lands off-screen.
@@ -271,19 +281,22 @@ export function createThreeView(canvas: HTMLCanvasElement, content: Content): Th
   const gunPivot = new THREE.Group();
   gunPivot.position.set(ax(post.x), ROOF_DECK_TOP_Y + GUN_PIVOT_H, TOWER_Z);
   scene.add(gunPivot);
-  const SOLDIER_R = 0.55;
-  const SOLDIER_BODY = 1.3;
-  const soldier = new THREE.Mesh(
-    new THREE.CapsuleGeometry(SOLDIER_R, SOLDIER_BODY, 4, 8),
-    new THREE.MeshStandardMaterial({ color: col('uniform'), flatShading: true }),
+
+  // The soldier is added to the SCENE, not to the gun. He used to be a child of `gunPivot`, which
+  // meant he inherited the barrel's rotation and cartwheeled with the aim; he now stands on his own
+  // feet beside the post and merely twists toward it (docs/areas/11-art-visual-style.md §3.4).
+  const soldier = createSoldier();
+  scene.add(soldier.group);
+  /** Where he stands on the roof: just behind the gun, on the deck's top face. */
+  const roofSpot = new THREE.Vector3(
+    gunPivot.position.x - SOLDIER_H * 0.15,
+    ROOF_DECK_TOP_Y,
+    TOWER_Z + SOLDIER_H * 0.8,
   );
-  // Centre of the deck, feet on its top face. The capsule's origin is its middle, so lift it by half
-  // its total height above ROOF_DECK_TOP_Y — derived, never a literal, so retuning the deck or the
-  // figure keeps his boots on the floor (docs/areas/11-art-visual-style.md §3.4).
-  soldier.position.set(0, ROOF_DECK_TOP_Y + SOLDIER_BODY / 2 + SOLDIER_R - gunPivot.position.y, 0);
-  gunPivot.add(soldier);
+  soldier.group.position.copy(roofSpot);
+
   const barrel = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.18, 0.18, BARREL_LEN, 8),
+    new THREE.CylinderGeometry(BARREL_LEN * 0.045, BARREL_LEN * 0.045, BARREL_LEN, 8),
     new THREE.MeshStandardMaterial({ color: col('gunmetal'), flatShading: true }),
   );
   barrel.geometry.translate(0, BARREL_LEN / 2, 0); // pivot at one end
@@ -291,11 +304,18 @@ export function createThreeView(canvas: HTMLCanvasElement, content: Content): Th
   barrelYaw.add(barrel);
   gunPivot.add(barrelYaw);
   const muzzle = new THREE.Mesh(
-    new THREE.SphereGeometry(0.45, 8, 6),
+    new THREE.SphereGeometry(BARREL_LEN * 0.13, 8, 6),
     new THREE.MeshBasicMaterial({ color: col('flashHot') }),
   );
   muzzle.visible = false;
   barrelYaw.add(muzzle);
+  // A stubby mount under the pivot, so the gun stands on the deck rather than floating at his chest.
+  const mount = new THREE.Mesh(
+    new THREE.CylinderGeometry(SOLDIER_H * 0.1, SOLDIER_H * 0.16, GUN_PIVOT_H, 6),
+    new THREE.MeshStandardMaterial({ color: col('gunmetalDk'), flatShading: true }),
+  );
+  mount.position.y = -GUN_PIVOT_H / 2;
+  gunPivot.add(mount);
 
   // ---- Pools: drones + projectiles ----------------------------------------------------------
   const droneGeo = new THREE.IcosahedronGeometry(0.55, 0);
@@ -365,6 +385,43 @@ export function createThreeView(canvas: HTMLCanvasElement, content: Content): Th
   let lastT = 0;
   let muzzleTimer = 0;
 
+  // Where the soldier is standing right now, eased between the roof post and the flat he is visiting.
+  // He is NEVER hidden: going indoors moves him, it does not delete him
+  // (docs/areas/11-art-visual-style.md §3.4 requirement 5).
+  const soldierSpot = roofSpot.clone();
+  const interiorSpot = new THREE.Vector3();
+
+  function updateSoldier(gs: GameState, vs: PlayingViewState, dt: number, now: number): void {
+    const m = gs.meters;
+    let worst = 0;
+    let crisis = false;
+    for (const key of Object.keys(m.values) as (keyof typeof m.values)[]) {
+      worst = Math.max(worst, m.values[key]);
+      if (m.inCrisis[key]) crisis = true;
+    }
+
+    if (vs.mode === 'interior') {
+      // Standing in the visited flat, on that floor's slab, opposite its resident.
+      interiorSpot.set(towerX + TW * 0.22, floorSlabY(vs.floor), TOWER_Z + TD * 0.1);
+    } else {
+      interiorSpot.copy(roofSpot);
+    }
+    // Ease rather than cut, so he visibly travels between the post and the flat alongside the camera.
+    soldierSpot.lerp(interiorSpot, Math.min(1, dt * 3));
+    soldier.group.position.copy(soldierSpot);
+
+    soldier.update({
+      dt,
+      aimAngle: gs.combat.aim.effectiveAngle,
+      pose: soldierPoseFrom({
+        firing: gs.combat.gun.firing && !gs.combat.gun.overheated && !gs.combat.gun.jammed,
+        crisis,
+        fatigue: worst / 100,
+      }),
+      time: now,
+    });
+  }
+
   function render(gs: GameState, _alpha: number, vs: PlayingViewState): void {
     const c = gs.combat;
     const now = gs.time.shiftSeconds;
@@ -421,8 +478,7 @@ export function createThreeView(canvas: HTMLCanvasElement, content: Content): Th
     // muzzle (barrel tip) is the visible source of fire; rotating +y·BARREL_LEN by aimZ gives its world
     // point, which the tracer blend below leans on so shots leave the barrel rather than the deck.
     gunPivot.visible = vs.mode === 'shooting';
-    const aimZ = -(c.aim.effectiveAngle + Math.PI / 2);
-    barrelYaw.rotation.z = aimZ;
+    const aimZ = -(c.aim.effectiveAngle + Math.PI / 2);    barrelYaw.rotation.z = aimZ;
     const muzzleX = gunPivot.position.x - BARREL_LEN * Math.sin(aimZ);
     const muzzleY = gunPivot.position.y + BARREL_LEN * Math.cos(aimZ);
     const muzzleZ = gunPivot.position.z;
@@ -470,6 +526,7 @@ export function createThreeView(canvas: HTMLCanvasElement, content: Content): Th
       }
     }
 
+    updateSoldier(gs, vs, dt, now);
     updateCamera(vs, dt, now);
     renderer.render(scene, camera);
   }
@@ -508,6 +565,7 @@ export function createThreeView(canvas: HTMLCanvasElement, content: Content): Th
       canvas.style.display = visible ? 'block' : 'none';
     },
     dispose(): void {
+      soldier.dispose();
       renderer.dispose();
       scene.traverse((o) => {
         if (o instanceof THREE.Mesh) {

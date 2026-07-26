@@ -65,10 +65,15 @@ state modules, it includes the **pure presentation modules**:
 
 | Module | What it must prove |
 |---|---|
-| `src/render/three/mapping.ts` | arena↔world round-trip and anchor positions |
-| `src/render/three/camera-director.ts` | pose table totality, blending endpoints, easing, aim-pose stability |
+| `src/render/three/mapping.ts` | arena↔world round-trip, anchor positions, layer ordering |
+| `src/render/three/camera-director.ts` | pose table totality, blending endpoints, easing, aim-pose stability, arena coverage by the shooting frustum |
+| `src/render/three/soldier.ts` | human scale, boots on the deck in every pose, yaw clamped so he cannot inherit the barrel |
 | `src/render/three/theme.ts` | the token table is frozen and well-formed |
 | `src/ui/shell/menu-model.ts` | wrap-around, disabled-skipping, clamping |
+
+`soldier.ts` imports `three`, which is fine: constructing geometries and reading
+transforms needs no GL context, so it runs in the default node environment like
+everything else. Only the renderer needs a browser.
 
 **Adding a module to the include set is how new code earns its coverage; removing one
 is only legitimate when the module itself is deleted.** When a rendering approach is
@@ -98,7 +103,8 @@ Area 00 wires these into `eslint.config.js`, `vitest.config.ts`, and a CI grep s
 
 Add **StrykerJS** (`npm run test:mutation`) over the pure-logic dirs (`src/systems`,
 `src/content` validators, scoring, meters, economy) **and the pure presentation
-modules** listed in §3 (`mapping.ts`, `camera-director.ts`, `menu-model.ts`).
+modules** listed in §3 (`mapping.ts`, `camera-director.ts`, `soldier.ts`,
+`menu-model.ts`).
 Mutation testing perturbs the
 *implementation* and checks that some test fails — directly catching tests that
 execute code without truly asserting its behavior, which is the dominant failure mode
