@@ -3,9 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "comment": "22.18 is the first release to strip TypeScript types natively, which is what lets scripts/gen-assets.mjs import the same tested generators the app uses.",
+    "node": ">=22.18"
+  },
   "description": "A bright 16-bit retro game with a grim, satirical anti-war premise. Built in TypeScript + Vite + Canvas 2D.",
   "scripts": {
+    "gen-assets": "node scripts/gen-assets.mjs",
+    "predev": "npm run gen-assets",
     "dev": "vite",
+    "prebuild": "npm run gen-assets",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run",

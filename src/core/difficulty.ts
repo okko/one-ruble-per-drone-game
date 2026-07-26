@@ -34,3 +34,20 @@ export function daylightAt(shiftSeconds: number, ramp: DifficultyRamp): number {
   const phase = (Math.max(0, shiftSeconds) - ramp.dayLengthSeconds / 2) / period;
   return (Math.cos(phase * 2 * Math.PI) + 1) / 2;
 }
+
+/**
+ * Position within the full day+night cycle in [0,1) for RENDER ONLY: 0 is midnight, 0.5 is midday.
+ *
+ * `daylightAt` is a cosine, so it cannot tell morning from afternoon — 0.5 means dawn *and* dusk.
+ * Anything that has to move in one direction across the day, above all the sun's bearing, needs this
+ * instead. Same clock and same period as `daylightAt`, expressed once here so the two can never
+ * disagree about when noon is.
+ */
+export function dayCycleAt(shiftSeconds: number, ramp: DifficultyRamp): number {
+  const period = ramp.dayLengthSeconds * 2;
+  const phase = (Math.max(0, shiftSeconds) - ramp.dayLengthSeconds / 2) / period;
+  // `daylightAt` peaks at phase 0, so phase 0 is noon; shift by half a cycle to put midnight at 0.
+  // Elapsed time is clamped at zero and the earliest phase is therefore -0.25, so the shifted value
+  // is always positive and `%` needs no correction for a negative operand.
+  return (phase + 0.5) % 1;
+}

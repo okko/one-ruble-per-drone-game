@@ -16,7 +16,6 @@
 import type { Scene, SceneId } from './scene';
 import type { SystemContext } from '../core/system-context';
 import type { InputEvent } from '../input/input';
-import type { Renderer } from '../render/renderer';
 
 export interface SceneManager {
   register<P>(id: SceneId, factory: () => Scene<P>): void;
@@ -26,7 +25,7 @@ export interface SceneManager {
   readonly active: SceneId;
   readonly overlay: SceneId | null;
   update(dt: number, ctx: SystemContext): void;
-  render(r: Renderer): void;
+  render(alpha: number): void;
   routeInput(e: InputEvent): void;
 }
 
@@ -141,10 +140,10 @@ export function createSceneManager(ctx: SystemContext, initial: SceneId = 'Boot'
       else activeScene?.update(dt, c);
     },
 
-    render(r: Renderer): void {
+    render(alpha: number): void {
       ensureStarted();
-      activeScene?.render(r);
-      overlayScene?.render(r);
+      activeScene?.render(alpha);
+      overlayScene?.render(alpha);
     },
 
     routeInput(e: InputEvent): void {

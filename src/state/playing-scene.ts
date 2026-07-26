@@ -20,7 +20,6 @@ import type { AudioEngineImpl } from '../audio/engine';
 import type { Scene } from './scene';
 import type { SystemContext } from '../core/system-context';
 import type { InputEvent } from '../input/input';
-import type { Renderer } from '../render/renderer';
 import type { ResidentDef, ServiceDef, FavorDef, ReliefRequest, Consequence } from '../content/residents';
 import type { MeterKey } from '../types/meter-key';
 import type { GameState } from './game-state';
@@ -175,11 +174,13 @@ export function createPlayingScene(opts: PlayingSceneOptions = {}): Scene {
     fireHeld = false;
     left = false;
     right = false;
+    opts.view?.setCameraState('interior'); // the director cranes down the tower face
   }
   function backToShooting(): void {
     mode = 'shooting';
     floor = TOP_FLOOR;
     feedback = null;
+    opts.view?.setCameraState('shooting');
   }
 
   // Routed through the event bus exactly like the old intercom panel; the engine consumes the intent.
@@ -300,7 +301,7 @@ export function createPlayingScene(opts: PlayingSceneOptions = {}): Scene {
       feedback = null;
       opts.audio?.setScene('Playing');
       opts.overlay?.setVisible(true);
-      opts.view?.setVisible(true);
+      // The world is never hidden — it is the backdrop behind every screen — so only the camera moves.
       opts.view?.startIntro(); // opening fly-up from the ground floor to the rooftop post
     },
 
@@ -354,10 +355,10 @@ export function createPlayingScene(opts: PlayingSceneOptions = {}): Scene {
       }
     },
 
-    render(r: Renderer): void {
+    render(alpha: number): void {
       if (!gs) return;
       const vs = viewState();
-      opts.view?.render(gs, r.alpha, vs);
+      opts.view?.render(gs, alpha, vs);
       opts.overlay?.update(gs, vs);
     },
 
@@ -368,7 +369,6 @@ export function createPlayingScene(opts: PlayingSceneOptions = {}): Scene {
       txnOffs.length = 0;
       opts.audio?.setScene('MainMenu');
       opts.overlay?.setVisible(false);
-      opts.view?.setVisible(false);
       gs = null;
     },
   };

@@ -3,7 +3,7 @@ import { describe, it, expect } from 'vitest';
 import {
   createCreditsView,
   updateCredits,
-  renderCredits,
+  creditsLines,
   scrubCredits,
   pageCredits,
   creditsContentHeight,
@@ -11,19 +11,27 @@ import {
   SCRUB_MAX,
 } from './credits-view';
 import { CREDITS } from '../content/credits';
-import { createRecordingRenderer } from '../test-support/recording-renderer';
 
 describe('credits-view', () => {
-  it('renders every section heading, entry title, and name', () => {
-    const r = createRecordingRenderer();
-    renderCredits(r, createCreditsView(), CREDITS);
+  it('flattens every section heading, entry title, and name, in roster order', () => {
+    const texts = creditsLines(CREDITS).map((l) => l.text);
     for (const section of CREDITS) {
-      expect(r.textsContaining(section.heading).length).toBeGreaterThan(0);
+      expect(texts).toContain(section.heading);
       for (const e of section.entries) {
-        expect(r.textsContaining(e.title).length).toBeGreaterThan(0);
-        for (const name of e.names) expect(r.textsContaining(name).length).toBeGreaterThan(0);
+        expect(texts).toContain(e.title);
+        for (const name of e.names) expect(texts).toContain(name);
       }
     }
+    // A heading always precedes the entries it introduces.
+    const first = CREDITS[0];
+    if (first?.entries[0]) {
+      expect(texts.indexOf(first.heading)).toBeLessThan(texts.indexOf(first.entries[0].title));
+    }
+  });
+
+  it('tags each line with the kind the panel styles it by', () => {
+    const kinds = new Set(creditsLines(CREDITS).map((l) => l.kind));
+    expect(kinds).toEqual(new Set(['heading', 'title', 'name', 'spacer']));
   });
 
   it('advances scrollY by exactly dt * speed and is reproducible', () => {
@@ -71,11 +79,11 @@ describe('credits-view', () => {
     expect(v.scrollY).toBeGreaterThan(0);
   });
 
-  it('does not mutate the roster while updating or rendering', () => {
+  it('does not mutate the roster while updating or flattening', () => {
     const before = JSON.stringify(CREDITS);
     const v = createCreditsView(10);
     updateCredits(v, 0.5, CREDITS);
-    renderCredits(createRecordingRenderer(), v, CREDITS);
+    creditsLines(CREDITS);
     expect(JSON.stringify(CREDITS)).toBe(before);
   });
 });

@@ -15,7 +15,7 @@ area doc.
 | Doc | What it is |
 |---|---|
 | [`game-design.md`](game-design.md) | Game Design Document — premise, tone, the five need meters (incl. 💩), economy of services & favors, random incidents, pinball scoring, failure/game-over, persistence. |
-| [`architecture.md`](architecture.md) | Tech stack (TypeScript + Vite + Canvas 2D + Vitest), project structure, the shared `GameState`/event-bus/scene contracts, the **testing strategy (all tests must pass)**, ownership rules, and the area-doc template every area below follows. |
+| [`architecture.md`](architecture.md) | Tech stack (TypeScript + Vite + three.js/WebGL2 + DOM UI + Vitest), project structure, the shared `GameState`/event-bus/scene contracts, the **testing strategy (all tests must pass)**, ownership rules, and the area-doc template every area below follows. |
 | [`compliance.md`](compliance.md) | **Mandatory** respect & anti-stereotype policy — who we may mock (the regime/war/military-institution) and who we must never ridicule (ordinary Russian people). |
 | [`testing.md`](testing.md) | **Mandatory** test strategy & quality gates — built **by AI**, so the gates are un-gameable and CI-enforced (coverage on lines/branches/functions, mutation testing, determinism golden, no focused/skipped tests, independent review). Supersedes `architecture.md §7`. |
 | [`compatibility.md`](compatibility.md) | **Mandatory** cross-browser & mobile spec — support matrix (evergreen + iOS Safari 15.4+), the touch control scheme (touch-to-aim, hold to fire), iOS-Safari requirements (audio unlock, viewport, storage), and the required Playwright matrix. |
@@ -24,7 +24,7 @@ area doc.
 
 | # | Area | Doc | Owns |
 |---|---|---|---|
-| 00 | Core Platform & Build | [`areas/00-core-platform.md`](areas/00-core-platform.md) | Vite/TS scaffold, fixed-timestep loop, seedable RNG, event bus, registry, math, 384×216 scaler, input, SceneManager/GameState skeletons. |
+| 00 | Core Platform & Build | [`areas/00-core-platform.md`](areas/00-core-platform.md) | Vite/TS scaffold, fixed-timestep loop, seedable RNG, event bus, registry, math, viewport/orientation, input, SceneManager/GameState skeletons. |
 | 01 | Gameplay Engine | [`areas/01-gameplay-engine.md`](areas/01-gameplay-engine.md) | `Playing` scene, drone spawning/AI, aiming + firing (overheat + jam hook), projectiles/collision, Post Integrity, game-over. |
 | 02 | Gameplay Status (Meters) | [`areas/02-meters-and-status.md`](areas/02-meters-and-status.md) | The five need meters, drain model, warn/crisis + debuff effects, relief API, compound-crisis game-over. |
 | 03 | Economy & Residents | [`areas/03-economy-and-residents.md`](areas/03-economy-and-residents.md) | Rubles/debt/reputation, resident roster, buy-service / beg-favor flows, favor-consequence catalog. |
@@ -34,22 +34,29 @@ area doc.
 | 07 | Main Menu | [`areas/07-main-menu.md`](areas/07-main-menu.md) | MainMenu scene, options + navigation + routing, title presentation, attract/idle mode. |
 | 08 | Highscores | [`areas/08-highscores.md`](areas/08-highscores.md) | Highscore model, entry scene (retro initials), top-N list scene, qualification/sort logic (via Persistence repo). |
 | 09 | State & Persistence | [`areas/09-state-and-persistence.md`](areas/09-state-and-persistence.md) | SceneManager implementation + legal transitions, localStorage wrapper (versioned, migrations, in-memory fallback), settings/highscores/meta repos. |
-| 10 | HUD & In-game UI | [`areas/10-hud-ui.md`](areas/10-hud-ui.md) | In-game overlay (meter bars incl. a poo-emoji icon 💩, ruble counter, pinball score/combo, post integrity), incident banner, resident interaction menu (view + intents). |
-| 11 | Art & Visual Style | [`areas/11-art-visual-style.md`](areas/11-art-visual-style.md) | Palette, sprite specs, parallax skyline + day/night, font, animation, the asset-manifest contract + placeholder-art provider. |
+| 10 | HUD & In-game UI | [`areas/10-hud-ui.md`](areas/10-hud-ui.md) | The whole DOM/CSS interface: design tokens, UI shell and screens, the in-game HUD (meters incl. 💩, rubles, pinball score/combo, city integrity), incident banner, resident interaction panel (view + intents). |
+| 11 | Art & Visual Style | [`areas/11-art-visual-style.md`](areas/11-art-visual-style.md) | The three.js presentation layer: procedural geometry and materials, the rooftop soldier, lighting + day/night, tone mapping and post, the camera director, motion, quality tiers. |
 | 12 | Credits View | [`areas/12-credits.md`](areas/12-credits.md) | Scrolling credits scene + the contributor roster (who participated, with what title). |
 
 ## Dependency & suggested build order
 
-Everything depends on **Core (00)**; **Art (11)** ships placeholder art early so no
-one is blocked on final pixels.
+Everything depends on **Core (00)**; **Art (11)** ships a rough but real 3D scene
+early so no one is blocked on final visuals.
 
 ```
-Phase 1 (foundation):      00 Core Platform   +   11 Art (placeholders)   +   09 State & Persistence
+Phase 1 (foundation):      00 Core Platform   +   11 Art (rough scene)    +   09 State & Persistence
 Phase 2 (gameplay logic):  02 Meters → 03 Economy, 04 Scoring, 05 Incidents   (parallel; share Core + events)
 Phase 3 (the game):        01 Gameplay Engine   (consumes Meters/Incidents flags, emits combat/score events)
 Phase 4 (presentation):    10 HUD/UI   +   06 Audio   (both react to GameState + events)
 Phase 5 (shell):           07 Main Menu   +   08 Highscores   +   12 Credits   (need SceneManager + Persistence + Art)
+Phase 6 (presentation overhaul): 11 Art → three.js world + rooftop soldier, 10 HUD/UI → DOM design system and screens;
+                                 the Canvas-2D pipeline (renderer, scaler, sprite atlas, palette) is retired.
 ```
+
+**Phase 6** replaces the original pixel-art presentation with a modern 3D world and a
+DOM interface. It touches only areas 10, 11, and the scene wiring — the simulation,
+balance tables, persistence schemas, and event contracts are deliberately untouched,
+which is what makes the swap safe.
 
 Within a phase, areas can be built in parallel because they integrate only through
 the shared contracts in `architecture.md` (§4 `GameState` slices, §5 event bus, §6

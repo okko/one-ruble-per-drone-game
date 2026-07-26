@@ -17,40 +17,57 @@ The game ships as static files and must play well on touch **and** desktop.
 | Android | Chrome (last 2), Samsung Internet (last 2) |
 
 The 15.4+ floor is deliberate: it lets us rely on **Pointer Events**, the dynamic
-viewport units (`dvh`/`svh`/`lvh`), and `image-rendering: pixelated` without polyfills.
-Anything below the floor may degrade but is not gated.
+viewport units (`dvh`/`svh`/`lvh`), CSS custom properties, and **WebGL2** without
+polyfills. Anything below the floor may degrade but is not gated.
 
-## 2. Rendering & canvas
+## 2. Rendering (WebGL2) & the UI layer
 
-- **Pixel-art scaling.** Emit `image-rendering: pixelated` **and**, defensively,
-  `-webkit-optimize-contrast` / `crisp-edges`, plus `ctx.imageSmoothingEnabled = false`.
-- **Backing buffer stays 384×216.** Never allocate a device-pixel-sized canvas — on
-  mobile that is a memory/fill-rate trap. The 384×216 buffer is **CSS-scaled** by the
-  largest integer that fits the viewport (letterboxed). High-DPI crispness comes from
-  `image-rendering`, not from a larger buffer.
-- **All five meter icons are pixel-art atlas sprites (see `11-art-visual-style.md
-  §3.4`).** Color-emoji rendered via `fillText` differ across platforms
-  (Apple/Google/Microsoft) and blur at 384×216, so **no** meter indicator uses it. The
-  poo icon is a pixel-art sprite **designed to read as the poo emoji 💩** — the brief
-  only requires it to *look like* 💩, not be the literal system glyph — and it is
-  authored/rendered exactly like the other four (😴🍞💧🚬). Every meter icon is
-  therefore pixel-consistent on every engine.
-- **Snapshot scope.** A per-engine Playwright screenshot snapshot guards **all five**
-  icons together (they must match across Chromium/WebKit/Firefox) — no emoji-glyph
-  special case, no per-OS variance to tolerate.
+The game draws its world with **three.js over WebGL2** at the device's native
+resolution, and paints all chrome as **DOM over the top**. There is no Canvas-2D
+renderer, no sprite atlas, and no fixed pixel-art backing buffer.
+
+- **WebGL2 is required for the 3D world, not for the game.** `createThreeView` probes
+  `canvas.getContext('webgl2')` itself and returns a **no-op view** when it is
+  unavailable, so the simulation and the entire DOM UI keep running over a CSS gradient
+  backdrop. The probe must stay **silent**: letting `THREE.WebGLRenderer` create the
+  context logs `console.error` before it throws, which trips the strict
+  no-console-error smokes on headless engines that ship WebGL disabled (CI Firefox runs
+  with `AllowWebgl2:false`). Acquire the context first, then pass it to the renderer.
+- **Device-pixel-ratio is capped.** `renderer.setPixelRatio(Math.min(devicePixelRatio, 3))`.
+  Uncapped DPR on a modern phone is a fill-rate and VRAM trap; the cap is the mobile
+  safety valve that the old "never allocate a device-pixel canvas" rule used to provide.
+- **Quality tiers.** Post-processing (bloom, SMAA, vignette, colour grade), shadow
+  resolution, and geometry detail are selected by tier. The low tier drops the post
+  chain entirely. Tiers are also forced down by the `reducedFlash` accessibility
+  setting. See `11-art-visual-style.md`.
+- **Context loss.** Handle `webglcontextlost` (preventDefault, stop rendering) and
+  `webglcontextrestored` (rebuild the scene). iOS discards contexts aggressively under
+  memory pressure; a lost context must not take the UI down with it.
+- **UI text is DOM at native resolution.** No canvas text measurement, no bitmap font,
+  no pixel snapping. Fonts come from a system stack so there is no web-font load cost
+  or FOUT.
+- **System emoji are permitted in the DOM UI layer.** The former ban existed because
+  color emoji drawn through canvas `fillText` blurred at 384×216 and varied across
+  platforms. In a DOM layer at native resolution neither applies, so the meter and
+  status indicators (😴 💩 🍞 💧 🚬 ₽) render as real emoji through the documented font
+  stack (`"Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji"`) and a shared
+  `.icon` class that fixes size and baseline. Per-engine glyph artwork **will** differ;
+  that variance is accepted, and any screenshot assertion covering an emoji must mask
+  it rather than pin it.
 
 ## 3. Viewport, orientation, and safe areas
 
-- **Sizing source.** Drive the scaler's `resize()` from **`window.visualViewport`**
+- **Sizing source.** Drive `ThreeView.resize()` from **`window.visualViewport`**
   (width/height) when present, falling back to `window.innerWidth/innerHeight`. Listen
   to `visualViewport` `resize`, `orientationchange`, and `resize` (debounced) so the
-  iOS Safari URL-bar show/hide reflow is handled instead of clipping the canvas.
+  iOS Safari URL-bar show/hide reflow is handled instead of leaving the WebGL canvas
+  mis-sized. The DOM UI reflows on its own via CSS.
 - **CSS height.** Use **`100dvh`** with a `100vh` fallback so the iOS toolbar does not
-  crop the game. Set the viewport meta to `viewport-fit=cover` and pad HUD/letterbox
+  crop the game. Set the viewport meta to `viewport-fit=cover` and pad the UI layer
   with `env(safe-area-inset-*)` so nothing important sits under the notch or home
   indicator.
 - **Orientation.** The game is 16:9 **landscape**. On a portrait phone, show a
-  cheerful **"rotate to landscape" overlay** rather than a tiny letterboxed strip.
+  cheerful **"rotate to landscape" overlay** rather than a cramped strip.
   The Screen Orientation **lock** API is unsupported on iOS Safari — we *prompt*, we
   cannot force.
 - **Fullscreen.** Unavailable on iPhone Safari. Do **not** depend on it; offer a
@@ -77,15 +94,24 @@ path." Mouse- and Touch-specific listeners are avoided.
 - The existing overheat / jam firing model is driven by the **same** fire-down/up
   signals — there is no separate mobile firing code path.
 
-**Canvas gesture hygiene (CSS + handlers):** `touch-action: none`, `user-select: none`,
+**Gesture hygiene (CSS + handlers):** `touch-action: none`, `user-select: none`,
 `-webkit-user-select: none`, `-webkit-touch-callout: none`, and `preventDefault` on
-pointer/touch events to suppress scrolling, double-tap-zoom, pull-to-refresh, and the
-long-press selection callout. Reuse the existing `InputEvent` union and `Scaler`
-contract — **extend, don't replace.**
+pointer events to suppress scrolling, double-tap-zoom, pull-to-refresh, and the
+long-press selection callout. Applied to `html`/`body`, the WebGL canvas, and the UI
+root. Reuse the existing `InputEvent` union — **extend, don't replace.**
 
-**Pointer→world mapping:** compute from `getBoundingClientRect()` + `clientX/clientY`
-(not `offsetX/offsetY`, which differ across browsers), minus the letterbox offset,
-divided by the integer CSS scale.
+**The UI layer must not swallow aim input.** `#ui` is `pointer-events: none` by default;
+only interactive panels opt back in. A full-screen transparent overlay that eats
+`pointerdown` is an aiming bug, and a required test case.
+
+**Pointer→world mapping:** compute canvas-relative coordinates from
+`getBoundingClientRect()` + `clientX/clientY` (not `offsetX/offsetY`, which differ
+across browsers), then convert to arena space via `ThreeView.screenToWorld`, which
+ray-casts against the fixed action plane (`ACTION_Z`) using a camera pinned to the canonical
+`shooting` pose. That camera never moves, so aim stays exact while the render camera
+cranes and blends — but it is also outside the scene graph, so it must be given an explicit
+`updateMatrixWorld` after posing or every ray is cast from the world origin.
+`tests/e2e/aim.spec.ts` runs on all four engines and is the gate.
 
 ## 5. Audio unlock & backgrounding (iOS)
 
@@ -113,8 +139,37 @@ divided by the integer CSS scale.
 
 The booted `Playing` scene must hold a frame-time budget on an emulated mid-tier
 mobile (Playwright CPU throttling) with a representative drone count, running N seconds
-without errors or unbounded growth. This reinforces the existing "no per-frame
-allocations" principle and the audio voice-cap; regressions fail the matrix.
+without errors or unbounded growth. For the 3D renderer that means, per frame:
+
+- **No allocations in the render loop.** Geometry, materials, `THREE.Vector3`/`Color`
+  scratch objects, and the drone/projectile meshes are created once and pooled or
+  reused. Allocating a `new THREE.Color()` per frame is a regression.
+- **Bounded draw calls.** Share geometries and materials; the scene-graph size is a
+  function of the content tables, not of elapsed time.
+- **The ceilings are enforced, not advisory.** `tests/e2e/render-cost.spec.ts` reads
+  `window.__render.stats` mid-run and fails the build if the scene exceeds:
+
+  | Metric | Ceiling | Measured (high tier, mid-combat) |
+  |---|---|---|
+  | Draw calls | 400 | ~110 |
+  | Geometries | 200 | ~134 |
+
+  These are **ratchets**. They started at 2000/600 and came down as instancing landed;
+  they may be raised only with a measurement and a reason in the commit message. The
+  gap between measured and ceiling is deliberate headroom for a busy wave, not slack to
+  be spent.
+- **Instancing is how the ceilings are met**, not culling. One `InstancedMesh` per
+  skyline building's facade, one for every rotor disc in the sky, one for the shockwave
+  rings, and one point cloud each for hot debris and smoke. Damage and lifetime are
+  expressed as `.count`, which costs nothing.
+- **Dispose on teardown.** `ThreeView.dispose()` releases geometries, materials,
+  textures, render targets, and the post-processing chain.
+- **Tier down, don't drop frames.** On a low tier, disable post-processing and shadows
+  rather than reducing the simulation rate — the fixed-timestep loop is never traded
+  away for visuals.
+- **No screenshot gate on the 3D scene** (§8). GPU rasterisation differs per engine and
+  a pixel diff of a lit scene is a flake generator; cost and structure are asserted
+  instead.
 
 ## 8. The cross-browser test matrix (mandatory)
 
@@ -122,14 +177,28 @@ allocations" principle and the audio voice-cap; regressions fail the matrix.
 test"), across **Chromium, WebKit (Safari engine), Firefox, and an emulated iPhone
 (WebKit) viewport**. Minimum suite:
 
-1. Boots to MainMenu without console errors on every engine.
+1. Boots to MainMenu without console errors on every engine — **including engines with
+   WebGL disabled**, where the no-op view path must stay silent and the DOM UI usable.
+   *(Covered: the GL-denied case patches `getContext` before app code runs, then starts a
+   run and reads the HUD, proving the sim is playable renderer-less and says nothing.)*
 2. Starts a run; a tap/click in the sky aims + fires and destroys a drone (covers the
-   §4 control scheme and `pointercancel` → cease-fire).
-3. Audio context reaches `running` after the first gesture (§5).
+   §4 control scheme and `pointercancel` → cease-fire). The closed-loop aim smoke is bounded
+   by wall clock rather than iteration count, so parallel load cannot fail a genuine pass.
+3. Audio context reaches `running` after the first gesture (§5). That gesture is a **menu
+   button**, not the canvas: the menu is modal, so unlock must not depend on reaching the world.
 4. `localStorage` round-trips, and the in-memory fallback path works when storage
    throws (§6).
 5. Mobile-viewport run holds the §7 frame-time budget under CPU throttling.
-6. HUD glyph-row screenshot snapshot matches per engine (§2 emoji sprites).
+6. The DOM UI is present and navigable: `#ui` mounts, keyboard navigation moves the
+   menu selection, and interactive panels receive pointer events while the rest of the
+   layer stays click-through. *(Covered: `aria-selected` follows the arrow keys, and a
+   hit test in the sky mid-run must land on `#game3d`.)*
+
+**No screenshot snapshots of the 3D scene.** A WebGL frame is not reproducible across
+engines, drivers, or GPUs; pinning one would be a flaky gate that teaches agents to
+re-baseline. Assert on DOM structure, text, and state hooks instead. Where a screenshot
+is genuinely useful it must be scoped to a DOM element and **mask any emoji**, whose
+artwork legitimately differs per platform (§2).
 
 **Caveat (documented, accepted by the owner):** WebKit-in-Playwright approximates the
 Safari engine but is **not identical** to real iOS Safari for audio unlock, storage
@@ -141,10 +210,10 @@ follow-up, not a blocking gate.
 
 | Area | Owns |
 |---|---|
-| 00 Core Platform | Pointer Events input + `pointercancel`; canvas gesture CSS; scaler DPR/`visualViewport`/safe-area/orientation; the Playwright matrix config; pointer→world mapping. |
+| 00 Core Platform | Pointer Events input + `pointercancel`; gesture-hygiene CSS; `visualViewport`/safe-area/orientation wiring; the Playwright matrix config; pointer→arena mapping through `ThreeView.screenToWorld`. |
 | 01 Gameplay Engine | Aim + hold-to-fire from the pointer; overheat/jam under held touch. |
 | 06 Audio | `webkitAudioContext` fallback; synchronous in-gesture unlock; visibility resume + auto-pause. |
 | 09 State & Persistence | Write-time private-mode fallback; ITP limitation note. |
-| 10 HUD & UI | On-screen intercom button (touch); minimum tap-target sizes; safe-area-aware layout; five-icon sprite snapshot. |
-| 11 Art & Visual Style | `image-rendering` fallbacks; pixel-art atlas sprites for all five meter icons (incl. a poo icon that reads as 💩), authored consistently. |
+| 10 HUD & UI | DOM UI layer: `pointer-events` discipline so aim is never swallowed; minimum tap-target sizes; safe-area-aware layout; keyboard navigability; emoji font stack. |
+| 11 Art & Visual Style | WebGL2 probe + silent no-op fallback; DPR cap; quality tiers; context-loss handling; per-frame allocation and disposal discipline. |
 | 07 Main Menu / 08 Highscores / 12 Credits | Pointer + keyboard navigable; readable and tappable at mobile scale within safe areas. |

@@ -1,9 +1,10 @@
 /**
  * Highscore name-entry scene (docs/areas/08-highscores.md §3.6). Two coexisting input methods:
  *  - keyboard: letter/digit/space keys append, Backspace deletes, Enter confirms;
- *  - on-screen character picker (the TOUCH method, no hardware keyboard on mobile): Arrow keys / a
- *    pointer tap move a cursor over a retro glyph grid, the primary action (fireDown / tap) activates
- *    the highlighted cell, and the `DEL` / `END` cells delete / confirm — fully playable by touch.
+ *  - on-screen character picker (the TOUCH method, no hardware keyboard on mobile): Arrow keys move
+ *    a cursor over the glyph grid and the primary action (fireDown) activates the highlighted cell,
+ *    while a tap activates a cell directly — the picker is real DOM buttons, so hit-testing is the
+ *    browser's job. The `DEL` / `END` cells delete / confirm.
  * On confirm the name is validated (`validateName`), saved via the injected `HighscoresRepo.add`
  * (the only persistence path), and the scene routes to the Highscores list with the new row's rank.
  * `dateISO` comes from the injected `now()` (clock-free logic; the host passes the real clock).
@@ -11,11 +12,11 @@
 import type { Scene } from './../../state/scene';
 import type { SceneManager } from './../../state/scene-manager';
 import type { InputEvent } from '../../input/input';
-import type { Renderer } from '../../render/renderer';
 import type { HighscoresRepo } from '../../persistence/highscores-repo';
 import type { HighscoreEntry, RunSummary } from '../../persistence/schemas';
 import type { AudioEngineImpl } from '../../audio/engine';
-import { drawSkyline } from '../../render/backdrop';
+import type { UiShell } from '../shell/ui-shell';
+import { createNameEntryScreen, type NameEntryVM } from '../screens/name-entry-screen';
 import { NAME_GLYPHS } from '../../content/highscores.glyphs';
 import { NEW_BEST_LINE } from '../../content/highscores.flavor';
 import { validateName, MAX_NAME_LEN } from './table';
@@ -31,6 +32,8 @@ export interface HighscoreEntryDeps {
   repo: HighscoresRepo;
   now: () => string; // ISO timestamp provider (clock injected by the host)
   audio?: Pick<AudioEngineImpl, 'playSfx'>;
+  /** Absent in node tests, where name assembly and persistence are what is under test. */
+  shell?: UiShell | undefined;
 }
 
 export interface HighscoreEntryScene extends Scene<HighscoreEntryParams> {
@@ -40,7 +43,12 @@ export interface HighscoreEntryScene extends Scene<HighscoreEntryParams> {
 
 /** Glyph grid + the two command cells, in cursor order. */
 export const PICKER_CELLS: readonly string[] = [...NAME_GLYPHS, 'DEL', 'END'];
-export const PICKER = { cols: 14, cellW: 26, cellH: 16, originX: 10, originY: 128 } as const;
+/**
+ * Columns the arrow-key cursor wraps at. The DOM grid reflows to fit the viewport, so this is now
+ * purely the keyboard's model of the grid rather than a layout constant — arrow navigation stays
+ * predictable at any width.
+ */
+export const PICKER_COLS = 14;
 
 const ARROWS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
 
@@ -62,24 +70,16 @@ export function createHighscoreEntryScene(deps: HighscoreEntryDeps): HighscoreEn
     runSummary: { score: 0, shiftSeconds: 0, dronesDowned: 0, cause: '' },
   };
 
-  const rows = Math.ceil(PICKER_CELLS.length / PICKER.cols);
+  const rows = Math.ceil(PICKER_CELLS.length / PICKER_COLS);
 
   function moveCursor(dx: number, dy: number): void {
-    const cols = PICKER.cols;
+    const cols = PICKER_COLS;
     let col = cursor % cols;
     let row = Math.floor(cursor / cols);
     col = (col + dx + cols) % cols;
     row = (row + dy + rows) % rows;
     cursor = Math.min(row * cols + col, PICKER_CELLS.length - 1);
     deps.audio?.playSfx('uiSelect');
-  }
-
-  function cellAt(x: number, y: number): number | null {
-    const col = Math.floor((x - PICKER.originX) / PICKER.cellW);
-    const row = Math.floor((y - PICKER.originY) / PICKER.cellH);
-    if (col < 0 || col >= PICKER.cols || row < 0 || row >= rows) return null;
-    const idx = row * PICKER.cols + col;
-    return idx < PICKER_CELLS.length ? idx : null;
   }
 
   function append(glyph: string): void {
@@ -115,9 +115,22 @@ export function createHighscoreEntryScene(deps: HighscoreEntryDeps): HighscoreEn
   function activate(index: number): void {
     const cell = PICKER_CELLS[index];
     if (cell === undefined) return;
+    cursor = index;
     if (cell === 'DEL') backspace();
     else if (cell === 'END') commit();
     else append(cell);
+  }
+
+  const screen = deps.shell ? createNameEntryScreen({ onActivate: activate }) : undefined;
+
+  function vm(): NameEntryVM {
+    return {
+      headline: NEW_BEST_LINE,
+      rank: `RANK #${params.rank}`,
+      name,
+      cells: PICKER_CELLS,
+      cursor,
+    };
   }
 
   return {
@@ -132,27 +145,16 @@ export function createHighscoreEntryScene(deps: HighscoreEntryDeps): HighscoreEn
       params = p;
       name = '';
       cursor = 0;
+      if (deps.shell && screen) {
+        deps.shell.show('name-entry', screen, { scrim: true });
+        screen.update(vm());
+      }
     },
 
     update(): void {},
 
-    render(r: Renderer): void {
-      drawSkyline(r, { dim: true });
-      r.text(NEW_BEST_LINE, r.width / 2, 14, { align: 'center', color: 'accentPink' });
-      r.text(`RANK #${params.rank}`, r.width / 2, 28, { align: 'center', color: 'rubleGold' });
-      r.text(`${name}_`, r.width / 2, 52, { align: 'center', color: 'cream', font: 'font.display' });
-
-      PICKER_CELLS.forEach((cell, i) => {
-        const col = i % PICKER.cols;
-        const row = Math.floor(i / PICKER.cols);
-        const x = PICKER.originX + col * PICKER.cellW;
-        const y = PICKER.originY + row * PICKER.cellH;
-        if (i === cursor) r.fillRect(x, y - 2, PICKER.cellW - 2, PICKER.cellH - 2, 'panelLite');
-        const label = cell === ' ' ? 'SP' : cell;
-        r.text(label, x + PICKER.cellW / 2, y, { align: 'center', color: i === cursor ? 'flash' : 'cream' });
-      });
-
-      r.text('ARROWS + FIRE / TAP · END TO CONFIRM', r.width / 2, 200, { align: 'center', color: 'cream' });
+    render(): void {
+      screen?.update(vm());
     },
 
     onInput(e: InputEvent): void {
@@ -160,15 +162,6 @@ export function createHighscoreEntryScene(deps: HighscoreEntryDeps): HighscoreEn
         case 'fireDown':
           activate(cursor);
           break;
-        case 'pointer': {
-          if (!e.down) break;
-          const idx = cellAt(e.world.x, e.world.y);
-          if (idx !== null) {
-            cursor = idx;
-            activate(idx);
-          }
-          break;
-        }
         case 'key': {
           if (!e.down) break;
           if (ARROWS.has(e.code)) {
@@ -186,12 +179,17 @@ export function createHighscoreEntryScene(deps: HighscoreEntryDeps): HighscoreEn
           }
           break;
         }
+        // Taps on the picker arrive as DOM clicks on the cell itself, so raw pointer
+        // events here would double-activate.
+        case 'pointer':
         case 'aim':
         case 'fireUp':
           break;
       }
     },
 
-    exit(): void {},
+    exit(): void {
+      deps.shell?.hide('name-entry');
+    },
   };
 }

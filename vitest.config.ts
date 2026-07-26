@@ -24,11 +24,22 @@ export default defineConfig({
         'src/systems/**',
         'src/state/scene-manager.ts',
         'src/state/create-game-state.ts',
-        'src/render/scaler.ts',
-        'src/render/sprite-provider.ts',
-        // Phase 6 art: pure pixel-art data + raster/layout math (DOM build-atlas.ts stays ungated).
-        'src/render/art/**',
-        'src/render/atlas/rasterize.ts',
+        // Presentation overhaul: the pure UI modules that carry the gate now that the
+        // Canvas-2D pipeline is retired (docs/testing.md §3).
+        'src/ui/shell/menu-model.ts',
+        // The presentation maths of the three.js layer: pure, three.js-free modules extracted so the
+        // arena↔world mapping and the camera states are proven by test rather than by eye
+        // (docs/testing.md §3).
+        'src/render/three/mapping.ts',
+        'src/render/three/camera-director.ts',
+        'src/render/three/soldier.ts',
+        'src/render/three/theme.ts',
+        'src/render/three/quality.ts',
+        'src/render/three/lighting.ts',
+        'src/render/three/texgen.ts',
+        'src/render/three/city-layout.ts',
+        'src/render/three/recoil.ts',
+        'src/render/three/vfx.ts',
       ],
       // game-state.ts is pure interfaces (no runtime); test-support helpers are not product logic.
       exclude: ['**/*.test.ts', '**/__fixtures__/**', 'src/test-support/**'],

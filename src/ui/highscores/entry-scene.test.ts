@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect, vi } from 'vitest';
-import { createHighscoreEntryScene, PICKER, PICKER_CELLS } from './entry-scene';
+import { createHighscoreEntryScene, PICKER_COLS, PICKER_CELLS } from './entry-scene';
 import type { HighscoreEntryParams } from './entry-scene';
 import type { SceneManager } from '../../state/scene-manager';
 import type { SystemContext } from '../../core/system-context';
@@ -15,13 +15,20 @@ const PARAMS: HighscoreEntryParams = {
   runSummary: { score: 5000, shiftSeconds: 120, dronesDowned: 50, cause: 'EXHAUSTION' },
 };
 
-function cellCenter(i: number): { x: number; y: number } {
-  const col = i % PICKER.cols;
-  const row = Math.floor(i / PICKER.cols);
-  return { x: PICKER.originX + col * PICKER.cellW + PICKER.cellW / 2, y: PICKER.originY + row * PICKER.cellH + PICKER.cellH / 2 };
-}
 const DEL = PICKER_CELLS.indexOf('DEL');
 const END = PICKER_CELLS.indexOf('END');
+
+/** Drive the cursor to a cell the way the d-pad does — the input method with no keyboard. */
+function pick(scene: ReturnType<typeof createHighscoreEntryScene>, index: number): void {
+  const row = Math.floor(index / PICKER_COLS);
+  const col = index % PICKER_COLS;
+  while (Math.floor(scene.cursor / PICKER_COLS) !== row) {
+    scene.onInput({ type: 'key', code: 'ArrowDown', down: true });
+  }
+  while (scene.cursor % PICKER_COLS !== col) {
+    scene.onInput({ type: 'key', code: 'ArrowRight', down: true });
+  }
+}
 
 function make() {
   const add = vi.fn(() => ({ rank: 3 }));
@@ -48,18 +55,30 @@ describe('HighscoreEntry scene', () => {
     expect(transition).toHaveBeenCalledWith('Highscores', { highlightRank: 3 });
   });
 
-  it('character-picker path (touch taps): builds the name, DEL + END work — no physical keyboard', () => {
+  it('cursor path: moving to a cell and firing builds the name; DEL and END work', () => {
     const { scene, add } = make();
-    const tap = (i: number): void => scene.onInput({ type: 'pointer', world: cellCenter(i), down: true });
-    tap(PICKER_CELLS.indexOf('A'));
+    const fire = (): void => scene.onInput({ type: 'fireDown' });
+    pick(scene, PICKER_CELLS.indexOf('A'));
+    fire();
     expect(scene.name).toBe('A');
-    tap(PICKER_CELLS.indexOf('B'));
+    pick(scene, PICKER_CELLS.indexOf('B'));
+    fire();
     expect(scene.name).toBe('AB');
-    tap(DEL);
+    pick(scene, DEL);
+    fire();
     expect(scene.name).toBe('A');
-    tap(END);
+    pick(scene, END);
+    fire();
     expect(add).toHaveBeenCalledTimes(1);
     expect(add).toHaveBeenCalledWith(expectedEntry('A'));
+  });
+
+  it('ignores raw pointer events: taps are DOM clicks on the picker cells, never hit-tests', () => {
+    const { scene, add } = make();
+    scene.onInput({ type: 'pointer', world: { x: 10, y: 10 }, down: true });
+    scene.onInput({ type: 'aim', world: { x: 10, y: 10 } });
+    expect(scene.name).toBe('');
+    expect(add).not.toHaveBeenCalled();
   });
 
   it('d-pad path: arrows move the cursor and fire activates the cell', () => {
@@ -70,16 +89,17 @@ describe('HighscoreEntry scene', () => {
     scene.onInput({ type: 'key', code: 'ArrowLeft', down: true });
     expect(scene.cursor).toBe(0);
     scene.onInput({ type: 'key', code: 'ArrowDown', down: true });
-    expect(scene.cursor).toBe(PICKER.cols); // one row down, same column
+    expect(scene.cursor).toBe(PICKER_COLS); // one row down, same column
     scene.onInput({ type: 'fireDown' });
-    expect(scene.name).toBe(PICKER_CELLS[PICKER.cols]); // the glyph under the cursor
+    expect(scene.name).toBe(PICKER_CELLS[PICKER_COLS]); // the glyph under the cursor
     scene.onInput({ type: 'key', code: 'Enter', down: true });
-    expect(add).toHaveBeenCalledWith(expectedEntry(PICKER_CELLS[PICKER.cols] as string));
+    expect(add).toHaveBeenCalledWith(expectedEntry(PICKER_CELLS[PICKER_COLS] as string));
   });
 
   it('an empty name falls back to the AAA placeholder on confirm', () => {
     const { scene, add } = make();
-    scene.onInput({ type: 'pointer', world: cellCenter(END), down: true });
+    pick(scene, END);
+    scene.onInput({ type: 'fireDown' });
     expect(add).toHaveBeenCalledWith(expectedEntry('AAA'));
   });
 });

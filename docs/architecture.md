@@ -10,17 +10,33 @@
 
 - **Language:** TypeScript, `strict: true`. No implicit `any`.
 - **Build/dev:** [Vite](https://vitejs.dev/) (ES modules, fast HMR, static build).
-- **Rendering:** **Canvas 2D** at a fixed internal resolution, integer-scaled to the
-  viewport with `image-rendering: pixelated` (+ Safari fallbacks — see
-  `compatibility.md §2`). No game framework by default (keeps logic testable and
-  dependency-light). Internal resolution: **384×216** (16:9).
+- **Rendering:** **three.js over WebGL2**, rendered at the device's native resolution
+  (capped device-pixel-ratio). The 3D world is the only drawing surface; there is no
+  Canvas-2D renderer, no sprite atlas, and no fixed pixel-art backing buffer.
+  See §6 for the render/UI layering contract and `compatibility.md §2` for the WebGL
+  requirement + degraded no-WebGL mode.
+- **User interface:** **DOM + CSS**, composited over the live 3D scene. Menus, the HUD,
+  overlays, and dialogs are real DOM elements driven by a design-token stylesheet — crisp
+  at native resolution, accessible, and directly assertable in Playwright.
 - **Audio:** Web Audio API (see Audio area).
-- **Tests:** [Vitest](https://vitest.dev/) (+ `jsdom` environment for DOM/canvas-
-  touching tests) for unit/integration/DOM; **mandatory** [Playwright](https://playwright.dev/)
+- **Tests:** [Vitest](https://vitest.dev/) (+ `jsdom` environment for DOM-touching tests)
+  for unit/integration/DOM; **mandatory** [Playwright](https://playwright.dev/)
   cross-browser matrix (Chromium + WebKit + Firefox + emulated iPhone) as a CI gate —
   see `testing.md` and `compatibility.md §8`.
 - **Lint/format:** ESLint + Prettier. **Typecheck:** `tsc --noEmit`.
 - **Persistence:** `localStorage` via a wrapped, injectable storage module.
+
+**Dependency policy:** `three` is the only runtime dependency. Its bundled addons
+(`three/examples/jsm/**` — `EffectComposer`, `RenderPass`, `UnrealBloomPass`, `SMAAPass`,
+`OutputPass`) are in scope; adding any *new* runtime package requires lead sign-off.
+No game framework, no UI framework — logic stays testable and dependency-light.
+
+**Simulation vs. presentation resolution.** `384×216` survives as the **arena coordinate
+space the simulation runs in** (spawn positions, aim angles, collision math, balance
+tables). It is *not* a render resolution and never was a virtue in itself — it is simply
+the unit system `src/content/balance.ts` is authored in. The renderer maps arena space
+into 3D world units and back (`src/render/three/mapping.ts`); gameplay is unaware a
+camera exists.
 
 **Target browsers:** evergreen desktop + iOS/iPadOS Safari 15.4+ (mobile is a
 first-class target). Full matrix and Safari specifics in `compatibility.md`.
@@ -31,26 +47,28 @@ No backend. Everything runs client-side and ships as static files.
 
 ```
 /
-  index.html
+  index.html           # #game3d (WebGL canvas) + #ui (DOM UI root) + #rotate-overlay
   package.json
   tsconfig.json
   vite.config.ts
   vitest.config.ts
-  .eslintrc.cjs / eslint.config.js
+  eslint.config.js
   /src
-    main.ts            # bootstrap: canvas, input, audio unlock, game loop driver
+    main.ts            # bootstrap: canvas, UI shell, input, audio unlock, game loop driver
     /core              # loop, fixed timestep, seedable RNG, clock, event bus, math, ECS registry
     /state             # app state machine (scenes) + shared GameState type
     /systems           # pure-ish update systems: spawning, shooting, meters, economy, scoring, incidents, difficulty
-    /entities          # entity/component shapes: drones, projectiles, pickups
-    /render            # renderers, sprite atlas, camera/scaler, HUD draw, background/parallax
+    /render
+      /three           # the three.js presentation layer (see §6.2)
     /audio             # audio engine, music director, sfx bank
-    /ui                # menus, settings, highscore entry/list views, dialog/toast
+    /ui
+      /styles          # design tokens + stylesheets (tokens.css, shell.css, hud.css)
+      /shell           # UI runtime: screen registry, transitions, pure menu-navigation model
+      /screens         # one DOM screen per scene: main menu, settings, game over, highscores, credits, pause
     /persistence       # storage wrapper, highscores repo, settings repo, migrations
     /content           # DATA: drone types, resident roster, incident catalog, balance tables
-    /assets            # sprites, audio, fonts
     /types             # cross-cutting shared types
-  /tests               # integration tests (unit tests may co-locate as *.test.ts)
+  /tests               # integration + Playwright e2e (unit tests co-locate as *.test.ts)
   /docs                # planning docs (this folder)
 ```
 
@@ -135,7 +153,9 @@ export interface GameEvents {
 }
 ```
 
-## 6. App state machine (scenes)
+## 6. App state machine, rendering & UI layering
+
+### 6.1 Scenes
 
 `state/` owns a finite state machine over scenes:
 
@@ -147,12 +167,72 @@ MainMenu → Highscores → MainMenu
 MainMenu → Credits → MainMenu        (and optionally GameOver/Highscores → Credits)
 ```
 
-Each scene implements `{ enter(params, ctx), update(dt, ctx), render(r), onInput(e), exit() }`
-— scenes read the fixed-timestep interpolation factor from `renderer.alpha` (a field on
-`Renderer`, not a `render()` argument). The Gameplay Engine owns the `Playing` scene; UI areas
-own menu/highscore/settings scenes. The lead owns the `Scene` / `SceneManager` / `Renderer`
-contracts (in `state/` and `render/`); **State & Persistence (09) implements the `SceneManager`
-FSM** (transition graph, overlays, lifecycle).
+Each scene implements `{ enter(params, ctx), update(dt, ctx), render(alpha), onInput(e), exit() }`.
+
+**A scene does not draw.** `render(alpha)` is a *presentation sync* step: the scene projects
+its state into a view model and hands it to its DOM screen and/or the 3D view. `alpha` is the
+fixed-timestep interpolation factor (0..1) for tweening. This replaces the retired
+`render(r: Renderer)` Canvas-2D contract.
+
+The Gameplay Engine owns the `Playing` scene; UI areas own menu/highscore/settings scenes. The
+lead owns the `Scene` / `SceneManager` / `ThreeView` / `UiScreen` contracts; **State &
+Persistence (09) implements the `SceneManager` FSM** (transition graph, overlays, lifecycle).
+
+### 6.2 The three.js layer (`src/render/three/`)
+
+The 3D world is a **pure renderer**: it reads `GameState` plus a scene-supplied view model
+each frame and never mutates gameplay. It is live at all times — during menus it renders a
+cinematic backdrop, not a frozen image.
+
+| Module | Responsibility |
+| --- | --- |
+| `mapping.ts` | **Pure.** Arena (384×216) ↔ world-unit conversion + its inverse. No `three` import. |
+| `camera-director.ts` | **The single camera state machine.** Owns every pose — `menu`, `intro`, `shooting`, `interior`, `pause` — and all blends between them. Pose/blend math is pure (`{eye, look, fov}` records). |
+| `world.ts` | Scene-graph construction: skyline towers, the soldier's cut-away tower, roof deck, drone/projectile pools. |
+| `soldier.ts` | The soldier figure standing on the roof deck (§ Art area), posed from meter state. |
+| `lighting.ts` | Day/night rig, tone mapping, shadow policy, quality tiers. |
+| `post.ts` | Post-processing chain (bloom, SMAA, vignette, colour grade). |
+| `theme.ts` | Named scene colours, mirroring the CSS design tokens. |
+| `view.ts` | Thin façade exposing the `ThreeView` contract + the no-WebGL `noopView` fallback. Holds **no** pose logic. |
+
+**Aiming.** Pointer→arena mapping ray-casts against the fixed action plane (`ACTION_Z`) through a
+dedicated camera pinned to the director's canonical `shooting` pose. That camera must be
+derived from the director (single source of truth) and never moved, so `screenToWorld` stays
+exact while the render camera cranes and blends. Being outside the scene graph, it must also be
+given an explicit `updateMatrixWorld` once it is posed — `Raycaster.setFromCamera` reads that
+matrix for the ray's origin and direction, and nothing else will ever refresh it.
+`tests/e2e/aim.spec.ts` gates this end to end.
+
+**No-WebGL.** `createThreeView` probes for a WebGL2 context silently and returns a no-op view
+if unavailable. The simulation and the entire DOM UI keep working over a CSS gradient backdrop.
+
+### 6.3 The DOM UI layer (`src/ui/`)
+
+All player-facing chrome is DOM. `src/ui/shell/` is the runtime (screen registry, mount/unmount,
+enter/exit transitions, focus management, and a **pure** list-navigation model);
+`src/ui/screens/` holds one screen per scene; `src/ui/styles/` holds the design tokens every
+screen consumes. `src/ui/game-overlay.ts` is the in-game HUD.
+
+Rules:
+
+- UI **reads** `GameState` / view models and **emits intents**. It never mutates game state.
+- All colour, type, spacing, and easing come from CSS custom properties in
+  `src/ui/styles/tokens.css` — no hard-coded values in TypeScript.
+- `#ui` is `pointer-events: none` by default; interactive panels opt in. Aim input must never
+  be swallowed by an invisible UI layer.
+- Every screen is keyboard-navigable and pointer/touch-operable; see `areas/10-hud-ui.md`.
+
+### 6.4 Dependency direction
+
+```
+content ─▶ systems ─▶ state ─▶ { render/three , ui }
+                                       └── never imported by systems/state logic
+```
+
+Renderers may import `state` **types**; `systems/` and `state/` logic must not import
+`render/` or `ui/` implementation. The seam is the per-scene view model
+(e.g. `state/playing-view.ts`), which is types-only so both renderers can consume it
+without a cycle.
 
 ## 7. Testing strategy (mandatory for every area)
 
@@ -177,9 +257,10 @@ minimum, and see `testing.md` for the anti-pattern rules every test must satisfy
 ## 8. Integration & ownership rules
 
 - An area may freely change files inside its own directory/slice.
-- Shared skeletons (`state/game-state.ts`, `core/events.ts`, `state/scene-manager`,
-  `core/rng`, `persistence` interface) are **lead-owned**; propose changes via PR
-  tagged for lead review.
+- Shared skeletons (`state/game-state.ts`, `state/scene.ts`, `core/events.ts`,
+  `state/scene-manager`, `core/rng`, the `persistence` interface, and the
+  `ThreeView` / `UiScreen` presentation contracts) are **lead-owned**; propose changes
+  via PR tagged for lead review.
 - Communicate cross-area needs through events and the `GameState` slice contract —
   never reach into another area's internal modules.
 - Content tables in `src/content/` are shared data; each area owns the tables for

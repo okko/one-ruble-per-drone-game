@@ -15,7 +15,7 @@ menu-style scenes.
 
 ### In scope
 - The `MainMenu` scene implementing the `Scene` contract (`enter/update/render/exit/onInput`).
-- Title presentation (logo, tagline, version, parallax skyline backdrop hookup).
+- Title presentation (logo, tagline, version) over the live cinematic 3D backdrop.
 - The menu option list, selection model, and navigation (keyboard + mouse).
 - Routing each option to the correct scene via the `SceneManager`.
 - The **How to Play** instructions panel and **Credits** panel (sub-views of this scene).
@@ -29,28 +29,34 @@ menu-style scenes.
 - The `SceneManager` skeleton and `Scene` interface — **Core/State** (`state/`).
 - The Settings scene contents and the Highscores list/entry scenes — **Settings**
   area and **Highscores** area. MainMenu only routes to them.
-- Final pixel art for the logo, fonts, and skyline sprites — **Art & Visual Style**
-  (this doc specifies layout and intent; Art supplies assets).
+- The design tokens, shell runtime, and shared UI components this scene composes —
+  **HUD & UI (10)**. This doc specifies content, ordering, and behaviour.
+- The 3D backdrop, its camera motion, and its lighting — **Art & Visual Style (11)**.
+  The menu *requests* the `menu` camera state; it does not move a camera.
 - Music tracks and SFX samples — **Audio** (this doc specifies cue points/triggers).
 - Persistence implementation — **State & Persistence** (this doc only reads settings).
 
 ## 3. Requirements & mechanics
 
 1. **Scene lifecycle.** `MainMenu` implements `{ enter(params, ctx), update(dt, ctx),
-   render(r), onInput(e), exit() }` (the canonical `Scene` contract; scenes read `renderer.alpha`)
+   render(alpha), onInput(e), exit() }` (the canonical `Scene` contract)
    and is the scene the `SceneManager` activates after `Boot` completes (per architecture.md §6).
-   - `enter()`: reset selection to the first enabled option, reset the idle timer,
-     request the menu music track (fade-in), kick off the menu-in transition.
-   - `update(dt)`: advance parallax/idle animations, advance the idle timer, drive
-     transition tweens, and advance attract mode when active.
-   - `render(r)`: draw backdrop → title → tagline → option list → footer; or the
-     active sub-panel (How to Play / Credits) when open; or the attract reel.
-   - `exit()`: stop accepting input, fade menu music as appropriate for the target
-     scene (Playing gets a hard cut to gameplay music; sibling menus keep music).
+   - `enter()`: mount the menu screen through the UI shell, request the **`menu`**
+     camera state, reset selection to the first enabled option, reset the idle timer,
+     request the menu music track (fade-in).
+   - `update(dt)`: advance the idle timer and attract mode; push changed values to the
+     mounted screen.
+   - `render(alpha)`: nothing is drawn here — the 3D view renders itself and the DOM
+     screen updates on state change. This hook exists only for interpolation-sensitive
+     presentation.
+   - `exit()`: unmount the screen, stop accepting input, fade menu music as
+     appropriate for the target scene (Playing gets a hard cut to gameplay music;
+     sibling menus keep music).
 2. **Title presentation.**
-   - Bright 16-bit logo treatment for **"One Ruble Per Drone"** rendered over the
-     parallax Moscow skyline backdrop (reuse the gameplay background renderer from
-     Art where possible so the menu and game feel continuous).
+   - A bold, modern logo treatment for **"One Ruble Per Drone"**, set in DOM type over
+     the live 3D skyline. The backdrop is the *same world* the game is played in — the
+     menu camera slowly orbits the tower, so the menu and the game feel continuous and
+     the player sees where they are about to stand.
    - **Tagline** beneath the logo, cheerful-but-grim, e.g. *"A ruble a drone — what
      a deal!"* Keep it relentlessly upbeat per the GDD tone rules. (Final copy with lead.)
    - Build/version string and a "© residents of the 23rd floor" style footer credit
@@ -72,18 +78,19 @@ menu-style scenes.
    - **Keyboard:** Up/Down (and W/S) move the selection with **wraparound** (top↔bottom),
      skipping disabled items; Enter/Space activates the selected item; Escape closes
      an open sub-panel (How to Play / Credits) and otherwise does nothing on the root.
-   - **Mouse:** hovering an option sets the selection to it; clicking activates it.
-     Hover and keyboard share one `selectedIndex` so they never desync.
+   - **Pointer / touch:** hovering or tapping an option sets the selection to it;
+     clicking or tapping again activates it. All inputs drive the same pure selection
+     model (`menu-model.ts`, area 10), so they can never desync.
    - Any input resets the idle timer and, if attract mode is active, exits attract
      mode back to the live menu (the input that woke it is consumed, not acted on).
-5. **Selection highlight.** The selected option is visually emphasized (color shift +
-   a chunky pixel cursor/chevron + a subtle bob animation). Disabled options render
-   dimmed and are not selectable.
+5. **Selection highlight.** The selected option is emphasised through the design
+   tokens — elevation, accent colour, and a subtle motion cue — and always carries a
+   visible focus ring. Disabled options render dimmed and are not selectable.
 6. **How to Play panel.** A single concise in-scene overlay summarizing: aim & fire
    the gun to down drones (+1 ₽ each), keep your five needs (😴 💩 🍞 💧 🚬) out of
    the red, buy services with rubles or beg favors when broke, survive incidents, and
    chase the pinball-style score. Escape/Back returns to the menu. Keep it one
-   screen, illustrated with the real HUD icons (coordinate with HUD & Art).
+   screen, illustrated with the real HUD icons (coordinate with HUD & UI).
 7. **Credits panel.** Scrolling or paged credits, cheerful tone. Escape/Back returns.
 8. **Attract / idle mode.** After **20 s** (tunable constant `IDLE_TIMEOUT_S`) of no
    input on the root menu, enter attract mode: a looping reel that cycles between
@@ -144,8 +151,9 @@ export function createMainMenuScene(deps: {
 }): MainMenuScene;
 ```
 
-Consumes the `SceneManager`/`Scene` contracts from `state/` (architecture.md §6) and
-the renderer `r` passed to `render`.
+Consumes the `SceneManager`/`Scene` contracts from `state/` (architecture.md §6), the
+UI shell and its pure selection model (area 10), and `ThreeView.setCameraState` to
+request the `menu` backdrop.
 
 ## 5. Data / content tables
 
@@ -162,8 +170,8 @@ the renderer `r` passed to `render`.
 ## 7. Dependencies & integration
 
 - **Consumes:** `SceneManager` (routing), `AudioApi` (music + nav SFX), `SettingsRepo`
-  and meta flags (Persistence), `HighscoreRepo` (attract reel data), the renderer and
-  parallax background (Art/Render).
+  and meta flags (Persistence), `HighscoreRepo` (attract reel data), the UI shell and
+  selection model (10), and the 3D backdrop's `menu` camera state (11).
 - **Emits/observes events:** none required on the gameplay event bus; navigation is
   local. May emit a lightweight `menuAction` for analytics later (optional).
 - **Injected ctx:** uses `ctx` only for the shared clock/`dt`; no RNG needed except a
@@ -174,8 +182,8 @@ the renderer `r` passed to `render`.
 Vitest under `jsdom`. All must pass in CI per `testing.md` (`npm run check` + the
 Playwright matrix green; no gate-gaming shortcuts).
 
-1. **Renders all options.** `render()` (against a fake canvas/text-capture renderer)
-   produces all five expected option labels in order.
+1. **Renders all options.** After mounting, the screen's DOM contains all five
+   expected option labels, in order.
 2. **Keyboard navigation moves selection.** Down advances `selectedIndex`; Up
    retreats it.
 3. **Wraparound.** Up from the first item lands on the last; Down from the last lands

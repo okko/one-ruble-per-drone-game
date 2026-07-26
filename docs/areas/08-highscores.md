@@ -32,8 +32,8 @@ never touches `localStorage` directly.
 - Deciding *when* the run ends and what the final score is — owned by **Gameplay
   Engine (01)** / the scene machine in **State (09)**. This area is *routed to* with
   a finished-run payload.
-- Pixel font, palette, table chrome, and frame art — owned by **Art (11)** and drawn
-  via **HUD & UI (10)** primitives.
+- Typography, layout chrome, and the shared components the tables are built from —
+  owned by **HUD & UI (10)**; the cinematic backdrop behind them by **Art (11)**.
 
 ## 3. Requirements & mechanics
 
@@ -148,8 +148,8 @@ belongs in area 09.
   carried on the event; the `notable` stat is assembled from `GameState` at game over).
 - **Emits:** none required; may emit a UI navigation intent handled by the
   SceneManager.
-- **Injected ctx:** `HighscoreRepo` (from 09); render primitives from HUD/UI (10);
-  font/palette from Art (11).
+- **Injected ctx:** `HighscoreRepo` (from 09); the UI shell, design tokens, and
+  selection model from HUD & UI (10); the backdrop camera state from Art (11).
 - **Reads slices:** the finished-run summary assembled from `GameState`
   (`scoring.total`, `time.shiftSeconds`, `combat` drone count) — passed in at game
   over, not pulled live.

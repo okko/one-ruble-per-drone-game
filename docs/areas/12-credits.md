@@ -1,6 +1,6 @@
 # Area: Credits View
 
-**Owner:** <unassigned> · **Depends on:** Core Platform (render, input, SceneManager), State & Persistence (scene machine), Art (font/palette/skyline), Audio (credits theme), Main Menu (routes here) · **Depended on by:** Main Menu, Game Over flow
+**Owner:** <unassigned> · **Depends on:** Core Platform (input, SceneManager), State & Persistence (scene machine), HUD & UI (shell, design tokens), Art (cinematic backdrop), Audio (credits theme), Main Menu (routes here) · **Depended on by:** Main Menu, Game Over flow
 
 > Read `docs/game-design.md` and `docs/architecture.md` first. This is the screen
 > that names everyone who participated in making the game, with their titles.
@@ -28,7 +28,8 @@ gameplay state, no mutation.
 ### Out of scope (owned elsewhere)
 - The Main Menu option that routes here (Main Menu area `07`) and the game-over →
   credits chaining decision (State `09` / Gameplay Engine `01`).
-- Font, palette, and skyline rendering primitives (Art `11` / Core render).
+- Typography, design tokens, and the shell that mounts this screen — **HUD & UI (10)**;
+  the 3D backdrop behind it — **Art (11)**.
 - The credits track itself as an audio asset (Audio `06`).
 
 ## 3. Requirements & mechanics
@@ -77,7 +78,8 @@ export interface CreditsViewState {
 }
 
 export function updateCredits(v: CreditsViewState, dt: number, roster: CreditsRoster): void;
-export function renderCredits(r: Renderer, v: CreditsViewState, roster: CreditsRoster): void;
+/** Pushes the current scroll state onto the mounted DOM screen. */
+export function applyCredits(el: HTMLElement, v: CreditsViewState, roster: CreditsRoster): void;
 ```
 
 No new event-bus events required (it only calls `sceneManager.replace(returnTo)` /
@@ -128,14 +130,14 @@ export const CREDITS: CreditsRoster = [
       { title: 'Highscores Engineer',                   names: ['Claude'] },
       { title: 'State & Persistence Engineer',          names: ['Claude'] },
       { title: 'HUD & In-game UI Engineer',             names: ['Claude'] },
-      { title: 'Art & Visual Style / Pixel Artist',     names: ['Claude'] },
+      { title: 'Art & Visual Style / 3D Artist',        names: ['Claude'] },
       { title: 'Credits Engineer',                      names: ['Claude'] },
     ],
   },
   {
     heading: 'Tools & Technology',
     entries: [
-      { title: 'Built with', names: ['TypeScript', 'Vite', 'Canvas 2D', 'Web Audio API', 'Vitest'] },
+      { title: 'Built with', names: ['TypeScript', 'Vite', 'three.js', 'WebGL2', 'Web Audio API', 'Vitest'] },
       { title: 'AI development', names: ['Claude'] },
     ],
   },
@@ -166,7 +168,8 @@ not required for done.
 **Calls:** `sceneManager.replace(returnTo)` on back/return; loops internally on
 `endBehavior:'loop'`.
 **Triggered by:** Main Menu `Credits` option (and optionally the game-over chain).
-**Uses:** Art font/palette/skyline (render), Audio credits theme.
+**Uses:** the UI shell and design tokens (10), the cinematic backdrop (11), Audio
+credits theme.
 Integration rule (architecture.md §8): view + scene-transition only; no reaching into
 other areas' internals.
 
@@ -213,5 +216,5 @@ Playwright matrix green; no gate-gaming shortcuts) per `testing.md`. Minimum:
   keep the AI-built attribution honest.
 - **Localization:** titles/headings should be localizable later (keep strings in the
   content table, not in render code).
-- **Skyline reuse:** coordinate with Art so the credits backdrop reuses the menu's
-  parallax layers rather than a bespoke asset.
+- **Backdrop reuse:** coordinate with Art so the credits screen reuses the menu's
+  camera state and the same live scene rather than a bespoke backdrop.

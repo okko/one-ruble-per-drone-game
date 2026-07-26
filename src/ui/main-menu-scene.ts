@@ -1,34 +1,39 @@
 /**
  * Main Menu scene (docs/areas/07-main-menu.md). The navigation hub after Boot: a data-driven option
  * list (keyboard + pointer, wraparound, skipping disabled), the How-to-Play and Credits sub-panels
- * (in-scene overlays — Credits reuses the shared `credits-view` roster + scroll), an attract/idle
- * reel after `IDLE_TIMEOUT_S`, menu-in transition + selection bob, and menu music + nav SFX through
- * the Audio API. Settings-aware: reads persisted volume/mute + reduced-motion on enter (the scene is
- * re-created on every transition here, so returning from Settings re-reads automatically). Routing is
- * local — no gameplay event bus needed.
+ * (in-scene panels — Credits reuses the shared `credits-view` scroll state), an attract/idle reel
+ * after `IDLE_TIMEOUT_S`, and menu music + nav SFX through the Audio API. Settings-aware: reads
+ * persisted volume/mute + reduced-motion on enter (the scene is re-created on every transition here,
+ * so returning from Settings re-reads automatically). Routing is local — no gameplay event bus.
+ *
+ * The scene owns *what* is on screen; `ui/screens/main-menu-screen` owns the DOM. Pointer selection
+ * and activation come back from real buttons, so no arena-coordinate hit-testing lives here.
  */
 import type { Scene } from '../state/scene';
 import type { SceneManager } from '../state/scene-manager';
 import type { InputEvent } from '../input/input';
-import type { Renderer } from '../render/renderer';
 import type { SettingsRepo } from '../persistence/settings-repo';
 import type { HighscoresRepo } from '../persistence/highscores-repo';
 import type { AudioEngineImpl } from '../audio/engine';
-import { INTERNAL_WIDTH } from '../render/scaler';
-import { drawSkyline } from '../render/backdrop';
+import type { UiShell } from './shell/ui-shell';
+import {
+  createMainMenuScreen,
+  type MainMenuVM,
+  type AttractVM,
+  type MenuPanel,
+} from './screens/main-menu-screen';
 import { MENU_ITEMS, TITLE, TAGLINE, FOOTER, HOW_TO_PLAY, ATTRACT_TEASER, type MenuItemId } from '../content/menu';
 import { CREDITS } from '../content/credits';
 import {
   createCreditsView,
   updateCredits,
-  renderCredits,
   scrubCredits,
   pageCredits,
   type CreditsViewState,
 } from './credits-view';
 import { groupThousands } from './format';
 
-export type MenuPanel = 'none' | 'howto' | 'credits' | 'attract';
+export type { MenuPanel };
 
 export interface MenuItem {
   id: MenuItemId;
@@ -56,26 +61,19 @@ export interface MainMenuDeps {
   settings: SettingsRepo;
   highscores: HighscoresRepo;
   idleTimeoutS?: number;
+  /** Absent in node tests, where navigation and routing are what is under test. */
+  shell?: UiShell | undefined;
 }
 
 const ATTRACT_CARD_S = 6;
-const TRANSITION_IN_S = 0.3;
 const SCRUB_STEP = 8;
-const OPTIONS_Y0 = 100;
-const ITEM_H = 18;
-const CX = INTERNAL_WIDTH / 2;
-
-function itemY(i: number): number {
-  return OPTIONS_Y0 + i * ITEM_H;
-}
 
 export function createMainMenuScene(deps: MainMenuDeps): MainMenuScene {
   const idleTimeoutS = deps.idleTimeoutS ?? 20;
   const { sceneManager, audio, settings, highscores } = deps;
 
   // Animation/local state (not part of the cross-area scene contract).
-  let transitionT = 0;
-  let bobT = 0;
+  // The title bob is a CSS keyframe on the masthead, so no bob timer lives here.
   let attractCardT = 0;
   let attractCardIndex = 0;
   let muted = false;
@@ -129,14 +127,6 @@ export function createMainMenuScene(deps: MainMenuDeps): MainMenuScene {
     it.activate(sceneManager);
   }
 
-  function optionAt(x: number, y: number): number | null {
-    for (let i = 0; i < self.items.length; i++) {
-      const cy = itemY(i);
-      if (x >= CX - 90 && x <= CX + 90 && y >= cy - 8 && y <= cy + 8) return i;
-    }
-    return null;
-  }
-
   const items: MenuItem[] = MENU_ITEMS.map((m) => ({
     id: m.id,
     label: m.label,
@@ -153,58 +143,41 @@ export function createMainMenuScene(deps: MainMenuDeps): MainMenuScene {
               : (): void => openPanel('credits'),
   }));
 
-  function renderMenu(r: Renderer): void {
-    drawSkyline(r);
-    r.text(TITLE, CX, 38, { align: 'center', color: 'flash', font: 'font.display' });
-    r.text(TAGLINE, CX, 54, { align: 'center', color: 'cream' });
-    const slide = reducedMotion ? 0 : Math.round((1 - Math.min(1, transitionT / TRANSITION_IN_S)) * 40);
-    self.items.forEach((it, i) => {
-      const sel = i === self.selectedIndex;
-      const bob = sel && !reducedMotion ? Math.round(Math.sin(bobT * 6) * 1.5) : 0;
-      const color = !it.enabled ? 'concreteDk' : sel ? 'flash' : 'cream';
-      if (sel) r.text('>', CX - 70 + slide, itemY(i) + bob, { color });
-      r.text(it.label, CX + slide, itemY(i) + bob, { align: 'center', color });
-    });
-    r.text(FOOTER, CX, 206, { align: 'center', color: 'cream' });
-    if (muted) r.text('MUTE', INTERNAL_WIDTH - 6, 8, { align: 'right', color: 'meterWarn' });
-  }
+  const screen = deps.shell
+    ? createMainMenuScreen({
+        onSelect: (i) => selectAt(i),
+        onConfirm: (i) => confirm(i),
+        roster: CREDITS,
+      })
+    : undefined;
 
-  function renderHowTo(r: Renderer): void {
-    drawSkyline(r, { dim: true });
-    r.text('HOW TO PLAY', CX, 22, { align: 'center', color: 'accentPink', font: 'font.display' });
-    HOW_TO_PLAY.forEach((line, i) => r.text(line, CX, 48 + i * 16, { align: 'center', color: 'cream' }));
-    r.text('ESC / TAP TO GO BACK', CX, 200, { align: 'center', color: 'cream' });
-  }
-
-  function renderCreditsPanel(r: Renderer): void {
-    drawSkyline(r, { dim: true });
-    renderCredits(r, credits, CREDITS);
-    r.text('ESC / TAP TO GO BACK', CX, 208, { align: 'center', color: 'cream' });
-  }
-
-  function renderAttract(r: Renderer): void {
-    const drift = reducedMotion ? 0 : Math.round((attractCardT * 6) % 24);
-    drawSkyline(r, { parallax: drift });
+  function attractVM(): AttractVM {
     if (attractCardIndex === 0) {
-      r.text("TODAY'S HEROES", CX, 28, { align: 'center', color: 'accentPink', font: 'font.display' });
-      highscores
-        .list()
-        .slice(0, 5)
-        .forEach((e, i) => {
-          const y = 60 + i * 16;
-          r.text(`${i + 1}. ${e.name}`, 70, y, { color: 'cream' });
-          r.text(groupThousands(e.score), 314, y, { align: 'right', color: 'rubleGold' });
-        });
-    } else {
-      ATTRACT_TEASER.forEach((line, i) =>
-        r.text(line, CX, 70 + i * 18, {
-          align: 'center',
-          color: i === 0 ? 'rubleGold' : 'cream',
-          font: i === 0 ? 'font.display' : 'font.hud',
-        }),
-      );
+      return {
+        kind: 'scores',
+        heading: "TODAY'S HEROES",
+        rows: highscores
+          .list()
+          .slice(0, 5)
+          .map((e) => ({ name: e.name, score: groupThousands(e.score) })),
+      };
     }
-    r.text('PRESS ANY KEY', CX, 200, { align: 'center', color: 'cream' });
+    return { kind: 'teaser', lines: ATTRACT_TEASER };
+  }
+
+  function vm(): MainMenuVM {
+    return {
+      title: TITLE,
+      tagline: TAGLINE,
+      footer: self.panel === 'attract' ? 'PRESS ANY KEY' : FOOTER,
+      items: self.items.map((it) => ({ id: it.id, label: it.label, enabled: it.enabled })),
+      selectedIndex: self.selectedIndex,
+      panel: self.panel,
+      muted,
+      howTo: HOW_TO_PLAY,
+      creditsScrollY: credits.scrollY,
+      attract: attractVM(),
+    };
   }
 
   const self: MainMenuScene = {
@@ -222,17 +195,17 @@ export function createMainMenuScene(deps: MainMenuDeps): MainMenuScene {
       self.selectedIndex = 0;
       self.panel = 'none';
       self.idleSeconds = 0;
-      transitionT = 0;
-      bobT = 0;
       const s = settings.get();
       muted = s.muted;
       reducedMotion = s.accessibility.reducedMotion;
       audio.setScene('MainMenu');
+      if (deps.shell && screen) {
+        deps.shell.show('main-menu', screen, { scrim: true });
+        screen.update(vm());
+      }
     },
 
     update(dt: number): void {
-      transitionT = Math.min(transitionT + dt, TRANSITION_IN_S);
-      bobT += dt;
       self.idleSeconds += dt;
       if (self.panel === 'attract') {
         attractCardT += dt;
@@ -249,21 +222,8 @@ export function createMainMenuScene(deps: MainMenuDeps): MainMenuScene {
       }
     },
 
-    render(r: Renderer): void {
-      switch (self.panel) {
-        case 'attract':
-          renderAttract(r);
-          break;
-        case 'howto':
-          renderHowTo(r);
-          break;
-        case 'credits':
-          renderCreditsPanel(r);
-          break;
-        case 'none':
-          renderMenu(r);
-          break;
-      }
+    render(): void {
+      screen?.update(vm());
     },
 
     onInput(e: InputEvent): void {
@@ -287,22 +247,9 @@ export function createMainMenuScene(deps: MainMenuDeps): MainMenuScene {
         if (isBack(e)) closePanel();
         return;
       }
-      // Root menu.
+      // Root menu. Pointer selection and activation arrive as DOM events on the option
+      // buttons themselves, so raw pointer events are not hit-tested here.
       switch (e.type) {
-        case 'aim': {
-          const i = optionAt(e.world.x, e.world.y);
-          if (i !== null) selectAt(i);
-          break;
-        }
-        case 'pointer': {
-          if (!e.down) break;
-          const i = optionAt(e.world.x, e.world.y);
-          if (i !== null) {
-            selectAt(i);
-            confirm(i);
-          }
-          break;
-        }
         case 'fireDown':
           confirm();
           break;
@@ -313,12 +260,16 @@ export function createMainMenuScene(deps: MainMenuDeps): MainMenuScene {
           else if (e.code === 'Enter' || e.code === 'NumpadEnter' || e.code === 'Space') confirm();
           break;
         }
+        case 'aim':
+        case 'pointer':
         case 'fireUp':
           break;
       }
     },
 
-    exit(): void {},
+    exit(): void {
+      deps.shell?.hide('main-menu');
+    },
   };
 
   return self;

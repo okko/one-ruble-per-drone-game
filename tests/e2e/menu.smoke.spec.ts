@@ -17,11 +17,12 @@ test('boots to the Main Menu, starts a run, and navigates to Highscores and back
   page.on('pageerror', (e) => errors.push(e.message));
 
   await page.goto('/');
-  const canvas = page.locator('#game');
+  const canvas = page.locator('#game3d');
   await expect(canvas).toBeVisible();
 
-  // Boot routes straight to the Main Menu.
+  // Boot routes straight to the Main Menu, which mounts real buttons into the DOM UI layer.
   await expect.poll(() => page.evaluate(sceneId), { timeout: 5000 }).toBe('MainMenu');
+  await expect(page.locator('#ui .ui-menu-item').first()).toContainText('START NEW SHIFT');
 
   // Navigate down to "Highscores" (option #2) and open it, then return to the menu.
   await page.keyboard.press('ArrowDown');

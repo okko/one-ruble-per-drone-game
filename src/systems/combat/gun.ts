@@ -30,6 +30,32 @@ export function approachAngle(current: number, target: number, maxStep: number):
   return normalizeAngle(current + Math.sign(diff) * maxStep);
 }
 
+/**
+ * The mount's stops: hard left and hard right, both laid along the roofline.
+ *
+ * Arena y counts downward and the pivot sits on `POST_Y`, which is the roof's own level, so the
+ * roofline is exactly the horizontal through the mount and every angle with a positive sine points
+ * below it. The gun therefore sweeps the half circle above: `-π` is hard left, `-π/2` is straight up,
+ * `0` is hard right. Nothing is lost by stopping there — the drones dive at rooftops between arena y
+ * 58 and 120, all of them well above the post — and it keeps the barrel out of the deck the soldier
+ * is standing on.
+ */
+export const AIM_LEFT_STOP = -Math.PI;
+export const AIM_RIGHT_STOP = 0;
+
+/**
+ * Bring a bearing inside the stops.
+ *
+ * Below the roofline the nearer stop wins, so a pointer dragged off the bottom of the screen parks
+ * the barrel on the left or right stop instead of choosing the far one and sweeping through the
+ * floor to reach it.
+ */
+export function clampAim(angle: number): number {
+  const a = normalizeAngle(angle);
+  if (a <= AIM_RIGHT_STOP) return a; // (-π, 0]: already above the roofline
+  return a < Math.PI / 2 ? AIM_RIGHT_STOP : AIM_LEFT_STOP;
+}
+
 /** Translate the Meters debuff struct into the engine's aim modifier (§3.7). */
 export function deriveAimModifier(eff: MeterEffects, balance: CombatBalance): AimModifier {
   return {
@@ -97,11 +123,20 @@ export function updateGun(
       desired = normalizeAngle(gun.angle + intent.rotateDir * effTurnRate * dt);
     }
   }
-  combat.aim.desiredAngle = desired;
+  combat.aim.desiredAngle = clampAim(desired);
 
   // 2. Slew the barrel toward desired at the (steadiness-scaled) turn rate, then apply sway.
-  gun.angle = approachAngle(gun.angle, desired, effTurnRate * dt);
-  combat.aim.effectiveAngle = applyAimModifier(gun, gun.angle, mod, tSeconds);
+  //
+  // Along the arc, not across it. `approachAngle` takes the shortest way round, and with the two
+  // stops exactly half a turn apart that is a coin toss between them which can send the barrel down
+  // through the deck to reach the far one. Between the stops the traverse is not a circle at all but
+  // the plain interval [0, π] of elevation above the right-hand stop, so it is slewed as one, where
+  // "toward" has only the one meaning and neither end can be reached the wrong way.
+  const targetUp = -combat.aim.desiredAngle;
+  const currentUp = -clampAim(gun.angle);
+  gun.angle = -(currentUp + clamp(targetUp - currentUp, -effTurnRate * dt, effTurnRate * dt));
+  // The sway is clamped too, or a gun parked on a stop with a drink in it dips below the roofline.
+  combat.aim.effectiveAngle = clampAim(applyAimModifier(gun, gun.angle, mod, tSeconds));
 
   // 3. Firing intent.
   gun.firing = intent.fireHeld && !locked;

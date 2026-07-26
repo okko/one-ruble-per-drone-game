@@ -1,12 +1,15 @@
 import { test, expect } from '@playwright/test';
 
 /**
- * Phase-1 boot smoke (docs/areas/00-core-platform.md §8.10, docs/compatibility.md §8). Runs on all
- * four engines. The remaining §8 cases need gameplay/audio/HUD/storage features that arrive in
- * later phases, so they are scaffolded as `test.fixme` with the owning area noted — to be
- * "unfixme'd" when that area lands. (Nothing is faked to make a gate pass.)
+ * Boot smoke (docs/areas/00-core-platform.md §8.10, docs/compatibility.md §8). Runs on all four
+ * engines. The world is a three.js canvas (`#game3d`) and every screen is DOM under `#ui`, so these
+ * assert against those rather than the retired 384×216 pixel buffer. The remaining §8 cases need
+ * features that arrive later and are scaffolded as `test.fixme` with the owning area noted — nothing
+ * is faked to make a gate pass.
  */
-test('boots to a rendered 384×216 canvas with no console errors', async ({ page }) => {
+test('boots to a full-viewport world canvas and a mounted UI, with no console errors', async ({
+  page,
+}) => {
   const errors: string[] = [];
   page.on('console', (m) => {
     if (m.type() === 'error') errors.push(m.text());
@@ -15,15 +18,18 @@ test('boots to a rendered 384×216 canvas with no console errors', async ({ page
 
   await page.goto('/');
 
-  const canvas = page.locator('#game');
+  const canvas = page.locator('#game3d');
   await expect(canvas).toBeVisible();
 
-  // Backing buffer MUST stay 384×216 (docs/compatibility.md §2 — never a device-pixel canvas).
-  const size = await canvas.evaluate((el) => {
-    const c = el as HTMLCanvasElement;
-    return { w: c.width, h: c.height };
+  // The world canvas fills the viewport — no letterbox, no fixed backing buffer (§request).
+  const fills = await canvas.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    return r.width >= window.innerWidth - 1 && r.height >= window.innerHeight - 1;
   });
-  expect(size).toEqual({ w: 384, h: 216 });
+  expect(fills).toBe(true);
+
+  // Boot routes straight to the Main Menu, which mounts its screen into the DOM UI layer.
+  await expect(page.locator('#ui .ui-menu-item').first()).toBeVisible({ timeout: 5000 });
 
   await page.waitForTimeout(250); // let the fixed-timestep loop run a few frames
   expect(errors).toEqual([]);
@@ -31,6 +37,10 @@ test('boots to a rendered 384×216 canvas with no console errors', async ({ page
 
 // --- Remaining compatibility.md §8 suite (unblock as each area lands) ---
 test('tap starts a run; held fire sweeping the sky destroys a drone; release ceases fire (§8.15)', async ({ page }) => {
+  // The aim loop below is closed over real frames, and every round-trip to the page costs wall clock.
+  // Budget it generously so a busy machine running the whole matrix in parallel cannot turn a genuine
+  // pass into a false failure — a flaky required gate is worse than no gate.
+  test.setTimeout(60_000);
   const errors: string[] = [];
   page.on('console', (m) => {
     if (m.type() === 'error') errors.push(m.text());
@@ -38,16 +48,16 @@ test('tap starts a run; held fire sweeping the sky destroys a drone; release cea
   page.on('pageerror', (e) => errors.push(e.message));
 
   await page.goto('/');
-  const canvas = page.locator('#game');
+  const canvas = page.locator('#game3d');
   await expect(canvas).toBeVisible();
-  await page.waitForTimeout(150); // let Boot route to the Main Menu
 
-  // The Main Menu opens with "Start New Shift" pre-selected. The tap is the first gesture (it unlocks
-  // audio; it lands on empty menu space, not an option), then Enter begins a run (MainMenu → Playing).
-  // Starting from the keyboard leaves the Playing scene with no pointer aim, so keyboard control then
-  // drives the gun (no reliance on the pointer→world mapping, and it stays valid on touch-only iPhone).
-  await canvas.click({ position: { x: 40, y: 40 } });
-  await page.keyboard.press('Enter');
+  // The Main Menu is a modal DOM screen over the world, so the first gesture of the session lands on
+  // its "Start New Shift" button — which both unlocks audio and begins the run. Starting this way
+  // leaves the Playing scene with no pointer aim, so keyboard control then drives the gun (no
+  // reliance on the pointer→world mapping, and it stays valid on touch-only iPhone).
+  const start = page.locator('#ui .ui-menu-item').first();
+  await expect(start).toBeVisible({ timeout: 5000 });
+  await start.click();
 
   const readState = (): Promise<{ downed: number; aim: number; drones: Array<{ x: number; y: number }> }> =>
     page.evaluate(() => {
@@ -82,7 +92,10 @@ test('tap starts a run; held fire sweeping the sky destroys a drone; release cea
   await page.keyboard.down('Space');
   let downed = 0;
   let lock: { x: number; y: number } | null = null; // commit to one drone (focus fire) until it's gone
-  for (let i = 0; i < 320 && downed === 0; i++) {
+  // Bounded by wall clock, not by iteration count: under parallel load each iteration costs more, so a
+  // fixed count would silently shrink the time the gun actually gets to track a target.
+  const deadline = Date.now() + 40_000;
+  while (downed === 0 && Date.now() < deadline) {
     const s = await readState();
     downed = s.downed;
     if (downed > 0) break;
@@ -123,12 +136,12 @@ test('audio context reaches "running" after the first gesture (area 06, §8.13)'
   test.skip(browserName !== 'webkit', 'unlock smoke targets the WebKit/iPhone path (§8.13)');
 
   await page.goto('/');
-  const canvas = page.locator('#game');
-  await expect(canvas).toBeVisible();
+  await expect(page.locator('#game3d')).toBeVisible();
 
-  // The context is created suspended; the first trusted tap (which also starts a run) must unlock it
-  // synchronously in the gesture handler — the iOS-critical path (docs/areas/06-audio.md §3.2).
-  await canvas.click({ position: { x: 40, y: 40 } });
+  // The context is created suspended; the first trusted tap must unlock it synchronously in the
+  // gesture handler — the iOS-critical path (docs/areas/06-audio.md §3.2). That tap is a menu
+  // button, because the Main Menu is modal, so the unlock cannot depend on reaching the canvas.
+  await page.locator('#ui .ui-menu-item').first().click();
   await expect
     .poll(() => page.evaluate(() => (window as Window & { __audio?: { state: string } }).__audio?.state), {
       timeout: 5000,
@@ -147,17 +160,15 @@ test('the DOM HUD overlay shows during a run (area 10, §8.16 — in-game UI is 
   page.on('pageerror', (e) => errors.push(e.message));
 
   await page.goto('/');
-  const canvas = page.locator('#game');
-  await expect(canvas).toBeVisible();
+  await expect(page.locator('#game3d')).toBeVisible();
 
-  // "Start New Shift" is pre-selected on the Main Menu; the tap unlocks audio, Enter begins the run.
-  await canvas.click({ position: { x: 40, y: 40 } });
-  await page.keyboard.press('Enter');
+  // "Start New Shift" is the first option; clicking it unlocks audio and begins the run.
+  await page.locator('#ui .ui-menu-item').first().click();
 
   const hud = page.locator('#hud');
   await expect(hud).toBeVisible({ timeout: 5000 });
   await expect(hud).toContainText('CITY INTEGRITY');
-  await expect(page.locator('#game3d')).toBeVisible(); // the Three.js world canvas is shown while Playing
+  await expect(page.locator('#game3d')).toBeVisible(); // the world is the permanent backdrop
   expect(errors).toEqual([]);
 });
 
@@ -166,4 +177,78 @@ test.fixme('localStorage round-trips; in-memory fallback engages when storage th
 });
 test.fixme('mobile-viewport run holds the frame-time budget under CPU throttling', () => {
   // area 01 Gameplay Engine (representative drone count)
+});
+
+test('with WebGL unavailable the world falls back silently and the DOM UI stays usable (§8.1)', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('console', (m) => {
+    if (m.type() === 'error') errors.push(m.text());
+  });
+  page.on('pageerror', (e) => errors.push(e.message));
+
+  // Deny every GL context before any app code runs. This is the CI-Firefox / blocklisted-GPU /
+  // software-rasteriser-refused case, and it must be SILENT: the probe in `createThreeView` returns
+  // the no-op view rather than letting THREE.WebGLRenderer log its own error first.
+  await page.addInitScript(() => {
+    const real = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function patched(
+      this: HTMLCanvasElement,
+      id: string,
+      ...rest: unknown[]
+    ) {
+      if (id === 'webgl' || id === 'webgl2' || id === 'experimental-webgl') return null;
+      return (real as (this: HTMLCanvasElement, ...a: unknown[]) => unknown).call(this, id, ...rest);
+    } as typeof HTMLCanvasElement.prototype.getContext;
+  });
+
+  await page.goto('/');
+
+  // The whole game is still there: the menu mounts, keys navigate it, and a run starts. Only the
+  // picture is missing, which is exactly what "renderer-less but playable" has to mean.
+  await expect(page.locator('#ui .ui-menu-item').first()).toBeVisible({ timeout: 5000 });
+  await page.keyboard.press('Enter');
+  await expect
+    .poll(() => page.evaluate(() => (window as Window & { __scene?: { id: string } }).__scene?.id), {
+      timeout: 5000,
+    })
+    .toBe('Playing');
+  await expect(page.locator('#hud')).toContainText('CITY INTEGRITY');
+
+  await page.waitForTimeout(250); // the fixed-timestep loop keeps running renderer-less
+  expect(errors).toEqual([]);
+});
+
+test('the UI layer is keyboard-navigable and never swallows aim (area 10, §8.6)', async ({
+  page,
+}) => {
+  await page.goto('/');
+
+  const items = page.locator('#ui .ui-menu-item');
+  await expect(items.first()).toBeVisible({ timeout: 5000 });
+
+  // One navigation model: the keyboard moves the selection, and the DOM reports it.
+  await expect(items.nth(0)).toHaveAttribute('aria-selected', 'true');
+  await page.keyboard.press('ArrowDown');
+  await expect(items.nth(1)).toHaveAttribute('aria-selected', 'true');
+  await expect(items.nth(0)).toHaveAttribute('aria-selected', 'false');
+  await page.keyboard.press('ArrowUp');
+  await expect(items.nth(0)).toHaveAttribute('aria-selected', 'true');
+
+  // The menu is modal, so its scrim deliberately takes pointer events. Once a run starts, the UI
+  // layer is decoration over a live world: a press in the sky must reach the canvas, or the player
+  // cannot aim. Asserted by hit-testing the layer rather than by trusting the CSS.
+  await items.nth(0).click();
+  await expect
+    .poll(() => page.evaluate(() => (window as Window & { __scene?: { id: string } }).__scene?.id), {
+      timeout: 5000,
+    })
+    .toBe('Playing');
+
+  const hitsCanvas = await page.evaluate(() => {
+    const el = document.elementFromPoint(window.innerWidth / 2, window.innerHeight * 0.25);
+    return el?.id ?? '';
+  });
+  expect(hitsCanvas).toBe('game3d');
 });

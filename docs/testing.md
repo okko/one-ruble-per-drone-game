@@ -42,9 +42,14 @@ Unchanged from the original strategy:
   RNG and injected `dt`.
 - **Integration (Vitest):** cross-area behavior through the event bus and
   `GameState` (e.g. "destroying a drone adds 1 ruble *and* emits `scoreChanged`").
-- **DOM/canvas (jsdom):** HUD/menus render expected text/state; storage round-trips.
-  Fake/in-memory backends only.
-- **No flakiness:** no wall-clock, real timers, real audio hardware, or
+- **DOM (jsdom):** HUD, screens, and menus render the expected text and state;
+  storage round-trips. Fake/in-memory backends only. Files opt into jsdom with
+  `// @vitest-environment jsdom`; the default environment stays `node`.
+- **Presentation math (node, pure):** the parts of the 3D layer that *can* be tested
+  without a GPU are extracted so they are — arena↔world coordinate mapping, camera
+  poses and blending, damping, and the theme table. Nothing in a test constructs a
+  WebGL context.
+- **No flakiness:** no wall-clock, real timers, real audio hardware, real WebGL, or
   `Math.random()`. Mock Web Audio and Storage.
 
 **Coverage — tightened.** Logic modules (`src/systems`, `src/content` validators,
@@ -53,6 +58,28 @@ functions**. Lines-only is the easiest metric for an AI to satisfy without real
 assertions; branch + function thresholds close that gap. Thresholds are committed in
 `vitest.config.ts` and CI fails below them. **Lowering any threshold requires lead
 sign-off** (enforced via CODEOWNERS on the config — see §9).
+
+The coverage `include` set names the modules that must carry that bar. Alongside
+`src/core`, `src/content`, `src/persistence`, `src/input`, `src/systems`, and the
+state modules, it includes the **pure presentation modules**:
+
+| Module | What it must prove |
+|---|---|
+| `src/render/three/mapping.ts` | arena↔world round-trip, anchor positions, layer ordering |
+| `src/render/three/camera-director.ts` | pose table totality, blending endpoints, easing, aim-pose stability, arena coverage by the shooting frustum |
+| `src/render/three/soldier.ts` | human scale, boots on the deck in every pose, yaw clamped so he cannot inherit the barrel |
+| `src/render/three/theme.ts` | the token table is frozen and well-formed |
+| `src/ui/shell/menu-model.ts` | wrap-around, disabled-skipping, clamping |
+
+`soldier.ts` imports `three`, which is fine: constructing geometries and reading
+transforms needs no GL context, so it runs in the default node environment like
+everything else. Only the renderer needs a browser.
+
+**Adding a module to the include set is how new code earns its coverage; removing one
+is only legitimate when the module itself is deleted.** When a rendering approach is
+replaced, the new pure modules are extracted, tested, and added to the include set
+*before* the old ones are deleted — never the other way round, because the gap in
+between is exactly where an agent would be tempted to lower a threshold.
 
 ## 4. Un-gameable gate rules (lint / config)
 
@@ -75,12 +102,32 @@ Area 00 wires these into `eslint.config.js`, `vitest.config.ts`, and a CI grep s
 ## 5. Mutation testing (anti-shallow-test gate)
 
 Add **StrykerJS** (`npm run test:mutation`) over the pure-logic dirs (`src/systems`,
-`src/content` validators, scoring, meters, economy). Mutation testing perturbs the
+`src/content` validators, scoring, meters, economy) **and every pure presentation
+module**: `mapping.ts`, `camera-director.ts`, `soldier.ts`, `theme.ts`, `quality.ts`,
+`lighting.ts`, `texgen.ts`, `city-layout.ts`, `recoil.ts`, `vfx.ts`, and
+`menu-model.ts`.
+
+**Adding a pure module to `vitest.config.ts` `coverage.include` and to
+`stryker.conf.json` `mutate` is part of writing it, not a follow-up.** A pure module
+outside the gates is untested by default no matter what its line coverage says, and the
+whole reason the renderer is split the way it is (§11 of the art area) is so that the
+provable half can be gated.
+
+Mutation testing perturbs the
 *implementation* and checks that some test fails — directly catching tests that
 execute code without truly asserting its behavior, which is the dominant failure mode
 of AI-written tests. Start with the score **advisory** (reported, non-blocking) and
 **ratchet a minimum mutation score upward** as phases complete, so it can never
 regress. Runs on logic-touching PRs and nightly, not on the fast inner-loop check.
+
+Camera and mapping code is a particularly good mutation target: an off-by-one in a
+pose or a flipped sign in a coordinate transform is invisible in a coverage report
+and obvious to a mutant. So is anything simulated: the particle field reached 100%
+line coverage while a dozen mutants that broke the integration entirely still lived,
+because "the debris moved and then went away" is true of almost any arithmetic. What
+killed them was asserting the *relationship* — that position advances by exactly the
+post-drag velocity, that drag strictly reduces horizontal speed, that a backwards step
+cannot hand a particle its life back.
 
 ## 6. Determinism golden test
 
@@ -98,6 +145,24 @@ and the golden updated deliberately (not auto-regenerated in CI).
 Real-browser end-to-end testing is **mandatory**, not optional. The Playwright matrix
 (Chromium + WebKit + Firefox + emulated iPhone) and its minimum suite, caveats, and
 performance budget are specified in `compatibility.md §8`. It is a required CI gate.
+
+E2E tests address the app through **stable structural selectors** — `#game3d` for the
+3D canvas and `#ui` for the interface root — plus the `window.__scene` / `window.__combat`
+/ `window.__audio` debug hooks. They must not assert on a fixed canvas backing-buffer
+size: the canvas is now sized to the viewport and device pixel ratio, so any hard-coded
+resolution assertion is wrong by construction.
+
+### Screenshot policy
+
+- **No screenshot snapshots of the 3D scene.** GPU, driver, and engine differences
+  make them permanently flaky. Assert on state and on DOM instead.
+- **No screenshot snapshots of emoji.** The UI uses system emoji, whose artwork
+  differs per OS and OS version by design. Any screenshot that includes them must
+  mask them.
+- Screenshots are acceptable only for DOM layout that is deliberately
+  engine-independent, and even then a structural assertion is preferred.
+- At least one engine in the matrix runs with WebGL2 unavailable, to prove the game
+  still boots, plays, and logs no console errors without a 3D backdrop.
 
 ## 8. Content-compliance gate (AI authors copy at scale)
 

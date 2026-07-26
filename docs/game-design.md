@@ -17,14 +17,21 @@ How long can you last, and how high can you score?
 
 ## 2. Tone & aesthetic
 
-- **Visuals:** bright, cheerful 16-bit SNES-era pixel art. Saturated palette, sunny
-  Moscow skyline, onion domes glinting, friendly chunky sprites.
+- **Visuals:** modern, cinematic 3D — the look and feel of a current console game.
+  A sunny, saturated Moscow skyline seen from a skyscraper roof, warm haze, glinting
+  onion domes, real depth and real light. Stylised and readable rather than
+  photoreal: clean silhouettes, bold colour, generous contrast.
+- **The soldier is on screen.** You are a conscript manning a machine-gun post on
+  **the roof of the tower you are defending**, and you can see him there — boots on
+  the deck, hands on the grips, greatcoat and ushanka. He is the emotional anchor of
+  the whole game; framing him is a requirement, not decoration.
 - **Audio:** bouncy, upbeat chiptune.
 - **Subtext:** the plot is grim and satirical. The contrast between the cheerful
-  presentation and the bleak premise *is* the game's identity. Keep the surface
-  relentlessly upbeat; let the darkness live in the writing, the economy, and the
-  consequences. Never break the cheerful tone in UI copy — a "you soiled yourself"
-  event should be announced like a game-show prize.
+  presentation and the bleak premise *is* the game's identity. The move to modern 3D
+  does **not** soften it — a prettier, sunnier surface makes the darkness underneath
+  land harder. Keep the surface relentlessly upbeat; let the darkness live in the
+  writing, the economy, and the consequences. Never break the cheerful tone in UI
+  copy — a "you soiled yourself" event should be announced like a game-show prize.
 
 This is satire. Keep it absurd and human, not gratuitous.
 
@@ -86,9 +93,8 @@ Notes:
   reduction. **Vodka** gives a large reduction *and* soothes sleep deprivation, but
   temporarily impairs aim (drunk) — risk/reward. This is the "smoke or get drunk"
   need from the brief.
-- The 💩 indicator **must clearly read as the poo emoji** in the HUD. It need not be
-  the literal system emoji glyph — a pixel-art icon that looks like 💩, authored and
-  rendered like the other meter icons, satisfies this.
+- The 💩 indicator **must clearly read as the poo emoji** in the HUD. The UI is DOM,
+  so it is the system emoji glyph, rendered like the other four meter icons.
 - **Crisis behavior:** when a meter reaches 100 it enters a crisis with a grace
   timer. Resolving the need clears it. If a meter stays in crisis past its grace
   timer, or if **two or more meters are simultaneously in crisis**, the run trends
@@ -182,9 +188,14 @@ Stored in `localStorage` (schema + versioning owned by Persistence area):
 
 ## 11. Platform
 
-TypeScript, runs in the browser. Canvas 2D rendering at a fixed retro internal
-resolution, integer-scaled. No server. See `docs/architecture.md` for the technical
-plan, shared contracts, and testing strategy.
+TypeScript, runs in the browser. The world is rendered in **3D with three.js on
+WebGL2** at the device's native resolution; the interface is **DOM and CSS**
+composited over it. No server, no install, no download gate.
+
+If WebGL2 is unavailable the game still boots and remains fully playable — the
+simulation, HUD, menus, and scoring are unaffected; only the 3D backdrop is absent.
+See `docs/architecture.md` for the technical plan and `docs/compatibility.md` for the
+browser matrix and degraded-mode rules.
 
 ## 12. Glossary
 

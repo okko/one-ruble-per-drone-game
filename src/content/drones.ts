@@ -4,16 +4,14 @@
  *
  * `kind` is the canonical key and MUST be a key in `scoringBalance.basePoints` for the kill to score
  * (`src/systems/scoring.ts` reads `basePoints[kind] ?? 0`) — `decoy_bird` is the one deliberate
- * exception (0 points, no ruble). `spriteId` decouples the kind from the shipped art id
- * (`drone.scout` etc.). The spec roster names (slow_tank/darter/…) are design flavor realized through
+ * exception (0 points, no ruble). The three.js view colours a drone from its `kind`, so the catalog
+ * carries no art id. The spec roster names (slow_tank/darter/…) are design flavor realized through
  * `movement`. Base hp/speed are at D=0 and scaled up per difficulty at spawn time.
  */
-import type { SpriteId } from './sprite-ids';
 import type { MovementKind } from '../state/game-state';
 
 export interface DroneDef {
   kind: string; // canonical key; must be a scoring basePoints key (except decoy_bird)
-  spriteId: SpriteId;
   baseHp: number; // at D=0; hpScale(D) rounds up from here
   baseSpeed: number; // px/s at D=0
   radius: number; // collision radius
@@ -27,7 +25,6 @@ export interface DroneDef {
 export const DRONES: DroneDef[] = [
   {
     kind: 'scout', // fast straight dash; the bread-and-butter target
-    spriteId: 'drone.scout',
     baseHp: 1,
     baseSpeed: 50,
     radius: 5,
@@ -39,7 +36,6 @@ export const DRONES: DroneDef[] = [
   },
   {
     kind: 'heavy', // slow bullet-sponge; big and easy to hit but soaks fire
-    spriteId: 'drone.armored',
     baseHp: 5,
     baseSpeed: 28,
     radius: 8,
@@ -51,7 +47,6 @@ export const DRONES: DroneDef[] = [
   },
   {
     kind: 'kamikaze', // accelerating dive; punishing escape damage
-    spriteId: 'drone.bomber',
     baseHp: 2,
     baseSpeed: 38,
     radius: 5,
@@ -63,7 +58,6 @@ export const DRONES: DroneDef[] = [
   },
   {
     kind: 'frenzy', // fast weaver; killing it triggers Scoring bonus mode (scoring triggerKind)
-    spriteId: 'drone.special',
     baseHp: 1,
     baseSpeed: 46,
     radius: 4,
@@ -75,7 +69,6 @@ export const DRONES: DroneDef[] = [
   },
   {
     kind: 'decoy_bird', // never targets the post; shooting it is penalized (Scoring/Incidents).
-    spriteId: 'decoy.bird', // Spawned only while the bird-flock incident sets `decoysActive`.
     baseHp: 1,
     baseSpeed: 34,
     radius: 4,
@@ -87,7 +80,6 @@ export const DRONES: DroneDef[] = [
   },
   {
     kind: 'boss', // very high HP, slow; only via the "major drone attack" incident override.
-    spriteId: 'drone.boss',
     baseHp: 40,
     baseSpeed: 16,
     radius: 14,

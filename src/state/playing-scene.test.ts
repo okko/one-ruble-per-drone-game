@@ -3,25 +3,11 @@ import { describe, it, expect } from 'vitest';
 import { createPlayingScene } from './playing-scene';
 import { createHudEconomy } from '../ui/hud/economy-adapter';
 import { createTestContext } from '../test-support/context';
-import type { Renderer } from '../render/renderer';
 import type { GameOverlay } from '../ui/game-overlay';
 import type { GameState } from './game-state';
 import type { PlayingViewState } from './playing-view';
 import type { HudEconomy, ResidentMenuModel } from '../ui/hud/types';
 import type { ResidentIntent } from '../core/events';
-
-/** A no-op Renderer (only `alpha` is read by the scene; rendering now goes to the injected Three view). */
-function fakeRenderer(): Renderer {
-  return {
-    width: 384,
-    height: 216,
-    alpha: 0,
-    clear(): void {},
-    drawSprite(): void {},
-    fillRect(): void {},
-    text(): void {},
-  };
-}
 
 /** A stub economy offering one buyable service for the penthouse resident (floor 32 = oligarch). */
 function stubEconomy(): HudEconomy {
@@ -68,7 +54,7 @@ describe('PlayingScene', () => {
     for (let i = 0; i < 60; i++) scene.update(1 / 60, ctx);
     expect(shots.length).toBeGreaterThan(0); // keyboard Space fired the gun through the engine
 
-    expect(() => scene.render(fakeRenderer())).not.toThrow(); // no view injected → no-op, no crash
+    expect(() => scene.render(0)).not.toThrow(); // no view injected → no-op, no crash
 
     scene.exit();
     const before = shots.length;
@@ -99,7 +85,7 @@ describe('PlayingScene', () => {
 
   it('render is a no-op before enter (no GameState yet)', () => {
     const scene = createPlayingScene();
-    expect(() => scene.render(fakeRenderer())).not.toThrow();
+    expect(() => scene.render(0)).not.toThrow();
   });
 
   it('E enters the building; ↑/↓ walk floors; stepping up off the roof returns to shooting (no fire inside)', () => {
@@ -139,7 +125,7 @@ describe('PlayingScene', () => {
     scene.enter(undefined, ctx);
 
     scene.onInput({ type: 'key', code: 'KeyE', down: true }); // enter at floor 32 (oligarch)
-    scene.render(fakeRenderer()); // builds the option list for the current floor
+    scene.render(0); // builds the option list for the current floor
     scene.onInput({ type: 'key', code: 'Enter', down: true }); // confirm the first option
 
     expect(intents).toContainEqual({ kind: 'buyService', residentId: 'oligarch', serviceId: 'water' });
@@ -158,9 +144,9 @@ describe('PlayingScene', () => {
     }
 
     scene.onInput({ type: 'key', code: 'KeyE', down: true }); // interior at floor 32 (oligarch)
-    scene.render(fakeRenderer()); // build the option list (water is option 0)
+    scene.render(0); // build the option list (water is option 0)
     scene.onInput({ type: 'key', code: 'Enter', down: true }); // buy it
-    scene.render(fakeRenderer()); // project the result into the view model
+    scene.render(0); // project the result into the view model
 
     const fb = cap.last()?.feedback;
     expect(fb?.ok).toBe(true);
@@ -178,9 +164,9 @@ describe('PlayingScene', () => {
     scene.enter(undefined, ctx); // broke: rubles start at 0
 
     scene.onInput({ type: 'key', code: 'KeyE', down: true }); // interior at floor 32 (oligarch)
-    scene.render(fakeRenderer());
+    scene.render(0);
     scene.onInput({ type: 'key', code: 'Enter', down: true }); // try to buy the ₽5 water with ₽0
-    scene.render(fakeRenderer()); // project the result into the view model
+    scene.render(0); // project the result into the view model
 
     const fb = cap.last()?.feedback;
     expect(fb?.ok).toBe(false);

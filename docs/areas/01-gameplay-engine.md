@@ -32,7 +32,7 @@ the heartbeat that every other gameplay area reacts to via the event bus.
   (we read a provided `AimModifier`; we do not model fatigue/drunkenness).
 - Triggering the gun jam, swarms, blackout effects → Random Incidents area (we
   expose hooks; Incidents drives them).
-- Drawing sprites, explosions, parallax skyline → Render/HUD/Art areas (we expose
+- Drawing the world, explosions, and skyline → Art (11) and HUD & UI (10) (we expose
   render data + emit events; we do not load images).
 - Sound → Audio area (reacts to our events).
 - Currency display, shop, favors → Economy/HUD (we only mutate `player.rubles`
@@ -42,7 +42,7 @@ the heartbeat that every other gameplay area reacts to via the event bus.
 
 ### 3.1 The Playing scene
 1. Implements the scene interface from `architecture.md` §6:
-   `enter()`, `update(dt, ctx)`, `render(r)`, `exit()`, `onInput(e)`.
+   `enter()`, `update(dt, ctx)`, `render(alpha)`, `exit()`, `onInput(e)`.
 2. `update` runs at the fixed 60 Hz timestep; all randomness via `ctx.rng`, all
    timing via the passed `dt`. No `Math.random()`, no real clock.
 3. Pausing is handled by the SceneManager (we simply stop being `update`d). On
@@ -212,7 +212,7 @@ export interface Drone {
 export function stepSpawns(combat: CombatState, dt: number, D: number, rng: Rng): SpawnCommand[];
 
 // Scene
-export const playingScene: Scene; // enter/update(dt,ctx)/render(r)/exit/onInput(e)
+export const playingScene: Scene; // enter/update(dt,ctx)/render(alpha)/exit/onInput(e)
 
 // Incident/Economy hooks
 export function setJam(combat: CombatState, jammed: boolean): void;

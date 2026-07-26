@@ -9,8 +9,7 @@
  * the shared city-integrity bar bottom-centre, a controls hint, and — in interior mode — a panel for the
  * current floor's resident (name + buy/beg options with the selected row highlighted).
  */
-import { PALETTE } from '../render/palette';
-import { METER_DISPLAY_ORDER } from './hud/theme';
+import './styles/tokens.css';
 import type { Content } from '../content/loader';
 import type { GameState } from '../state/game-state';
 import type { PlayingViewState, FeedbackTone } from '../state/playing-view';
@@ -22,13 +21,33 @@ export interface GameOverlay {
   dispose(): void;
 }
 
+/**
+ * Colours come from the design tokens, never from a hard-coded hex. Every value here is a `var()`
+ * reference, so a token edit reaches the HUD without touching this file, and the HUD can never drift
+ * away from the screens it sits next to.
+ */
+const T = {
+  text: 'var(--c-text)',
+  textMuted: 'var(--c-text-muted)',
+  accent: 'var(--c-accent)',
+  good: 'var(--c-good)',
+  warn: 'var(--c-warn)',
+  danger: 'var(--c-danger)',
+  surface: 'var(--c-surface)',
+  surfaceRaised: 'var(--c-surface-raised)',
+  hairline: 'var(--c-hairline)',
+} as const;
+
 const METER_EMOJI: Record<MeterKey, string> = { sleep: '😴', hunger: '🍞', thirst: '💧', vice: '🚬', poo: '💩' };
 
+/** Fixed top-to-bottom order (docs/areas/10-hud-ui.md §5); a meter never moves row between frames. */
+const METER_DISPLAY_ORDER: readonly MeterKey[] = ['sleep', 'hunger', 'thirst', 'vice', 'poo'];
+
 const TONE_COLOR: Record<FeedbackTone, string> = {
-  cost: PALETTE.domeGold,
-  good: PALETTE.meterGood,
-  bad: PALETTE.meterCrit,
-  neutral: PALETTE.cream,
+  cost: T.accent,
+  good: T.good,
+  bad: T.danger,
+  neutral: T.text,
 };
 
 // Quick CSS keyframes for the interactions: the transaction-result dialog pops in / fades out on its own
@@ -48,7 +67,7 @@ const OVERLAY_CSS = `
 }
 @keyframes ggo-spend {
   0%   { transform: scale(1); }
-  35%  { transform: scale(1.28); color: ${PALETTE.meterCrit}; }
+  35%  { transform: scale(1.28); color: ${T.danger}; }
   100% { transform: scale(1); }
 }`;
 
@@ -79,10 +98,10 @@ export function createGameOverlay(host: HTMLElement, content: Content): GameOver
     position: 'absolute',
     inset: '0',
     pointerEvents: 'none',
-    fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace',
-    color: PALETTE.cream,
-    textShadow: '0 2px 4px rgba(0,0,0,0.8)',
-    zIndex: '5',
+    fontFamily: 'var(--font-numeric)',
+    color: T.text,
+    textShadow: 'var(--text-scrim)',
+    zIndex: 'var(--z-overlay)',
     userSelect: 'none',
   });
 
@@ -92,8 +111,8 @@ export function createGameOverlay(host: HTMLElement, content: Content): GameOver
   for (const key of METER_DISPLAY_ORDER) {
     const row = el('div', { display: 'flex', alignItems: 'center', gap: '0.8vh' });
     row.appendChild(el('span', { fontSize: '2.4vh', width: '3vh' }, METER_EMOJI[key]));
-    const track = el('div', { width: '18vh', height: '1.6vh', background: 'rgba(0,0,0,0.45)', border: `1px solid ${PALETTE.shadow}`, borderRadius: '2px', overflow: 'hidden' });
-    const fill = el('div', { height: '100%', width: '0%', background: PALETTE.meterGood, transition: 'width 0.1s linear' });
+    const track = el('div', { width: '18vh', height: '1.6vh', background: 'rgba(0,0,0,0.45)', border: `1px solid ${T.hairline}`, borderRadius: '2px', overflow: 'hidden' });
+    const fill = el('div', { height: '100%', width: '0%', background: T.good, transition: 'width 0.1s linear' });
     track.appendChild(fill);
     row.appendChild(track);
     metersBox.appendChild(row);
@@ -103,8 +122,8 @@ export function createGameOverlay(host: HTMLElement, content: Content): GameOver
 
   // ---- Score + combo (top-right) ------------------------------------------------------------
   const scoreBox = el('div', { position: 'absolute', top: '2vh', right: '2vh', textAlign: 'right' });
-  const scoreText = el('div', { fontSize: '3.4vh', fontWeight: '700', color: PALETTE.domeGold }, '00,000,000');
-  const comboText = el('div', { fontSize: '2.2vh', color: PALETTE.cream }, '×1');
+  const scoreText = el('div', { fontSize: '3.4vh', fontWeight: '700', color: T.accent }, '00,000,000');
+  const comboText = el('div', { fontSize: '2.2vh', color: T.text }, '×1');
   scoreBox.appendChild(scoreText);
   scoreBox.appendChild(comboText);
   root.appendChild(scoreBox);
@@ -124,16 +143,16 @@ export function createGameOverlay(host: HTMLElement, content: Content): GameOver
   root.appendChild(banner);
 
   // ---- Rubles (bottom-left) -----------------------------------------------------------------
-  const rublesText = el('div', { position: 'absolute', bottom: '5vh', left: '2vh', fontSize: '3vh', color: PALETTE.domeGold }, '₽ 0');
-  const debtText = el('div', { position: 'absolute', bottom: '2vh', left: '2vh', fontSize: '2.2vh', color: PALETTE.meterCrit }, '');
+  const rublesText = el('div', { position: 'absolute', bottom: '5vh', left: '2vh', fontSize: '3vh', color: T.accent }, '₽ 0');
+  const debtText = el('div', { position: 'absolute', bottom: '2vh', left: '2vh', fontSize: '2.2vh', color: T.danger }, '');
   root.appendChild(rublesText);
   root.appendChild(debtText);
 
   // ---- City integrity (bottom-centre) -------------------------------------------------------
   const integBox = el('div', { position: 'absolute', bottom: '2vh', left: '50%', transform: 'translateX(-50%)', textAlign: 'center', width: '36vh' });
   integBox.appendChild(el('div', { fontSize: '1.8vh', letterSpacing: '0.2vh' }, 'CITY INTEGRITY'));
-  const integTrack = el('div', { width: '100%', height: '2vh', background: 'rgba(0,0,0,0.5)', border: `1px solid ${PALETTE.shadow}`, borderRadius: '3px', overflow: 'hidden', marginTop: '0.4vh' });
-  const integFill = el('div', { height: '100%', width: '100%', background: PALETTE.meterGood, transition: 'width 0.2s linear' });
+  const integTrack = el('div', { width: '100%', height: '2vh', background: 'rgba(0,0,0,0.5)', border: `1px solid ${T.hairline}`, borderRadius: '3px', overflow: 'hidden', marginTop: '0.4vh' });
+  const integFill = el('div', { height: '100%', width: '100%', background: T.good, transition: 'width 0.2s linear' });
   integTrack.appendChild(integFill);
   integBox.appendChild(integTrack);
   root.appendChild(integBox);
@@ -151,12 +170,12 @@ export function createGameOverlay(host: HTMLElement, content: Content): GameOver
     minWidth: '40vh',
     maxWidth: '70vh',
     background: 'rgba(26,28,44,0.92)',
-    border: `2px solid ${PALETTE.panelLite}`,
+    border: `2px solid ${T.surfaceRaised}`,
     borderRadius: '6px',
     padding: '2vh',
     display: 'none',
   });
-  const panelTitle = el('div', { fontSize: '2.8vh', fontWeight: '700', color: PALETTE.domeGold, marginBottom: '1vh' }, '');
+  const panelTitle = el('div', { fontSize: '2.8vh', fontWeight: '700', color: T.accent, marginBottom: '1vh' }, '');
   const panelList = el('div', { display: 'grid', gap: '0.6vh' });
   panel.appendChild(panelTitle);
   panel.appendChild(panelList);
@@ -174,13 +193,13 @@ export function createGameOverlay(host: HTMLElement, content: Content): GameOver
     minWidth: '34vh',
     maxWidth: '60vh',
     background: 'rgba(26,28,44,0.94)',
-    border: `2px solid ${PALETTE.panelLite}`,
+    border: `2px solid ${T.surfaceRaised}`,
     borderRadius: '6px',
     padding: '1.4vh 2vh',
     display: 'none',
     textAlign: 'left',
   });
-  const fbTitle = el('div', { fontSize: '2.4vh', fontWeight: '700', color: PALETTE.domeGold }, '');
+  const fbTitle = el('div', { fontSize: '2.4vh', fontWeight: '700', color: T.accent }, '');
   const fbWho = el('div', { fontSize: '1.6vh', opacity: '0.75', marginBottom: '0.8vh' }, '');
   const fbLines = el('div', { display: 'grid', gap: '0.4vh' });
   fbCard.appendChild(fbTitle);
@@ -202,7 +221,7 @@ export function createGameOverlay(host: HTMLElement, content: Content): GameOver
       if (!fill) continue;
       const v = Math.max(0, Math.min(100, gs.meters.values[key]));
       fill.style.width = `${v}%`;
-      fill.style.background = gs.meters.inCrisis[key] ? PALETTE.meterCrit : v >= warn[key] ? PALETTE.meterWarn : PALETTE.meterGood;
+      fill.style.background = gs.meters.inCrisis[key] ? T.danger : v >= warn[key] ? T.warn : T.good;
     }
 
     // Score + combo.
@@ -224,26 +243,26 @@ export function createGameOverlay(host: HTMLElement, content: Content): GameOver
     // City integrity.
     const frac = Math.max(0, Math.min(1, gs.combat.postIntegrity / maxIntegrity));
     integFill.style.width = `${frac * 100}%`;
-    integFill.style.background = frac > 0.5 ? PALETTE.meterGood : frac > 0.25 ? PALETTE.meterWarn : PALETTE.meterCrit;
+    integFill.style.background = frac > 0.5 ? T.good : frac > 0.25 ? T.warn : T.danger;
 
     // Wave / siren banner.
     const phase = gs.combat.waves.phase;
     if (vs.siren.active) {
       const secs = Math.max(0, Math.ceil(vs.siren.secondsUntilWave ?? 0));
       banner.textContent = `🚨 AIR RAID — INCOMING ${secs}s`;
-      banner.style.background = PALETTE.meterCrit;
-      banner.style.color = PALETTE.cream;
+      banner.style.background = T.danger;
+      banner.style.color = T.text;
       banner.style.opacity = Math.sin(gs.time.shiftSeconds * 8) > 0 ? '1' : '0.55';
     } else if (phase === 'active') {
       banner.textContent = `WAVE ${gs.combat.waves.index}`;
       banner.style.background = 'rgba(0,0,0,0.4)';
-      banner.style.color = PALETTE.cream;
+      banner.style.color = T.text;
       banner.style.opacity = '1';
     } else {
       const secs = Math.max(0, Math.ceil(vs.siren.secondsUntilWave ?? 0));
       banner.textContent = `NEXT WAVE IN ${secs}s — visit residents`;
       banner.style.background = 'rgba(0,0,0,0.35)';
-      banner.style.color = PALETTE.meterGood;
+      banner.style.color = T.good;
       banner.style.opacity = '1';
     }
 
@@ -274,7 +293,7 @@ export function createGameOverlay(host: HTMLElement, content: Content): GameOver
     if (fb.nonce === lastFeedbackNonce) return; // already showing this result — let it finish its animation
     lastFeedbackNonce = fb.nonce;
 
-    const accent = fb.ok ? (fb.kind === 'favor' ? PALETTE.domeGold : PALETTE.meterGood) : PALETTE.meterCrit;
+    const accent = fb.ok ? (fb.kind === 'favor' ? T.accent : T.good) : T.danger;
     fbCard.style.borderColor = accent;
     fbTitle.style.color = accent;
     fbTitle.textContent = `${fb.ok ? (fb.kind === 'favor' ? '🤲 ' : '✅ ') : '🚫 '}${fb.title}`;
@@ -314,9 +333,9 @@ export function createGameOverlay(host: HTMLElement, content: Content): GameOver
         fontSize: '2.1vh',
         padding: '0.5vh 1vh',
         borderRadius: '3px',
-        background: selected ? PALETTE.panel : 'transparent',
-        color: disabled ? PALETTE.concrete : o.kind === 'favor' ? PALETTE.domeGold : PALETTE.cream,
-        outline: selected ? `2px solid ${PALETTE.panelLite}` : 'none',
+        background: selected ? T.surface : 'transparent',
+        color: disabled ? T.textMuted : o.kind === 'favor' ? T.accent : T.text,
+        outline: selected ? `2px solid ${T.surfaceRaised}` : 'none',
       }, `${selected ? '▶ ' : '  '}${label}`);
       panelList.appendChild(row);
     });

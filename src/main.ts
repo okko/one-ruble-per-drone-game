@@ -17,10 +17,8 @@ import { createWebAudioBackend, type AudioSettings } from './audio/backend';
 import { createAudioEngine } from './audio/engine';
 import { createHudEconomy } from './ui/hud/economy-adapter';
 import type { SettingsView } from './ui/hud/types';
-import { createScaler } from './render/scaler';
-import { createCanvasRenderer } from './render/canvas-renderer';
-import { createArtAtlas } from './render/atlas/build-atlas';
-import { createThreeView, type ThreeView } from './render/three/view';
+import { createThreeView, type RenderStats, type ThreeView } from './render/three/view';
+import { createUiShell } from './ui/shell/ui-shell';
 import { createGameOverlay } from './ui/game-overlay';
 import { createInput } from './input/input';
 import { createSceneManager } from './state/scene-manager';
@@ -31,7 +29,6 @@ import { createGameOverScene } from './state/game-over-scene';
 import { createMainMenuScene } from './ui/main-menu-scene';
 import { createHighscoreEntryScene } from './ui/highscores/entry-scene';
 import { createHighscoresListScene } from './ui/highscores/list-scene';
-import manifestJson from './content/assets.manifest.json';
 import type { SystemContext } from './core/system-context';
 import type { GameState } from './state/game-state';
 
@@ -45,24 +42,24 @@ declare global {
     __audio?: { readonly state: string };
     // Mirrors the active scene id for the shell smoke (tests/e2e/menu). Harmless in prod.
     __scene?: { readonly id: string };
+    // Mirrors what the GPU is being asked to do, so the e2e can machine-check the bounded-draw-call
+    // and tiering rules in docs/compatibility.md §7. Harmless in prod; read-only over renderer.info.
+    __render?: { readonly stats: RenderStats | null };
   }
 }
 
 function main(): void {
-  const canvas = document.getElementById('game') as HTMLCanvasElement | null;
-  if (!canvas) throw new Error('main: #game canvas not found');
-  const ctx2d = canvas.getContext('2d');
-  if (!ctx2d) throw new Error('main: 2D canvas context unavailable');
-  const rotateOverlay = document.getElementById('rotate-overlay') ?? undefined;
-  // The Three.js in-game scene renders to its own WebGL canvas at native resolution; the DOM HUD
-  // overlays it. Both are optional (absent canvas ⇒ headless-safe no-op).
+  // The Three.js world renders to its own WebGL canvas at native resolution; the DOM UI layer sits
+  // above it. Both are optional (absent host ⇒ headless-safe no-op). The portrait rotate prompt is
+  // pure CSS (`@media (orientation: portrait)`), so nothing here drives it.
   const canvas3d = document.getElementById('game3d') as HTMLCanvasElement | null;
+  const uiRoot = document.getElementById('ui');
   const hudHost = document.getElementById('hud');
 
   // Core substrate + injected context.
   const rng = createRng(0x1234abcd);
   const events = createEventBus();
-  const content = loadContent({ manifest: manifestJson }); // throws loudly on malformed data
+  const content = loadContent(); // throws loudly on malformed data
   const ctx: SystemContext = { rng, events, content };
 
   // Persistence.
@@ -84,27 +81,26 @@ function main(): void {
     muted: settings.muted,
   };
 
-  // Render.
-  const scaler = createScaler(canvas, rotateOverlay);
-  // Real art: pixel-art grids rasterised into an in-memory atlas at boot; the provider falls back to
-  // placeholders for any id without a grid yet (content.manifest stays validated by loadContent above).
-  const atlas = createArtAtlas();
-  const renderer = createCanvasRenderer(ctx2d, atlas.provider, atlas.canvas);
-
-  // The DOM HUD overlay (no WebGL) is built up front; the Three.js world view is created LAZILY on the
-  // first run so boot/menu never touch WebGL (keeps the strict no-console-error smokes clean on headless
-  // engines without a GL context). Both self-disable when their backing surface is unavailable.
-  const overlay = hudHost ? createGameOverlay(hudHost, content) : undefined;
-  let view: ThreeView | undefined;
-  const ensureView = (): ThreeView | undefined => {
-    if (!view && canvas3d) {
-      view = createThreeView(canvas3d, content);
-      const vw = window.visualViewport?.width ?? window.innerWidth;
-      const vh = window.visualViewport?.height ?? window.innerHeight;
-      view.resize(vw, vh);
-    }
-    return view;
+  // Render + UI.
+  //
+  // The 3D view is created EAGERLY: the menu, the intro crane, and the pause pull-back are all
+  // camera states of one continuous world, so there is no longer a moment in the app's life where
+  // nothing 3D is on screen. `createThreeView` probes for WebGL2 silently and returns a working
+  // no-op view when there is no context, which is what keeps the strict no-console-error smokes
+  // clean on engines without GL.
+  //
+  // `reducedFlash` is read once, here: it decides whether the post chain (bloom above all) is built
+  // at all, and the settings screen that would let it change mid-run is not live yet.
+  const view: ThreeView | undefined = canvas3d
+    ? createThreeView(canvas3d, content, { reducedFlash: settings.accessibility.reducedFlash })
+    : undefined;
+  window.__render = {
+    get stats(): RenderStats | null {
+      return view ? view.stats() : null;
+    },
   };
+  const shell = uiRoot ? createUiShell(uiRoot) : undefined;
+  const overlay = hudHost ? createGameOverlay(hudHost, content) : undefined;
 
   // Audio (area 06): the real Web Audio backend behind the injectable seam; SFX + music wired to the
   // event bus. Stays suspended until the first user gesture unlocks it (iOS-safe, below).
@@ -141,14 +137,14 @@ function main(): void {
   };
   manager.register('Boot', () => createBootScene(manager, meta));
   manager.register('MainMenu', () =>
-    createMainMenuScene({ sceneManager: manager, audio, settings: settingsRepo, highscores }),
+    createMainMenuScene({ sceneManager: manager, audio, settings: settingsRepo, highscores, shell }),
   );
   manager.register('Playing', () =>
-    createPlayingScene({ onState, audio, view: ensureView(), overlay, economy: hudEconomy, settings: settingsView }),
+    createPlayingScene({ onState, audio, view, overlay, economy: hudEconomy, settings: settingsView }),
   );
-  manager.register('Settings', () => createSettingsScene(manager));
+  manager.register('Settings', () => createSettingsScene({ sceneManager: manager, shell }));
   manager.register('GameOver', () =>
-    createGameOverScene({ sceneManager: manager, repo: highscores, meta, audio }),
+    createGameOverScene({ sceneManager: manager, repo: highscores, meta, audio, shell }),
   );
   manager.register('HighscoreEntry', () =>
     createHighscoreEntryScene({
@@ -156,35 +152,41 @@ function main(): void {
       repo: highscores,
       now: () => new Date().toISOString(),
       audio,
+      shell,
     }),
   );
   manager.register('Highscores', () =>
-    createHighscoresListScene({ sceneManager: manager, repo: highscores, audio }),
+    createHighscoresListScene({ sceneManager: manager, repo: highscores, audio, shell }),
   );
   wireGameOver(events, manager, meta);
 
-  // Input. The 2D canvas (menus) owns the keyboard; the 3D canvas (Playing) takes pointer-only aim via
-  // the Three view's screenToWorld so keystrokes are never delivered twice.
-  createInput(canvas, scaler, {
-    onEvent: (e) => manager.routeInput(e),
-    // iOS unlocks the AudioContext only from a synchronous in-gesture resume (compatibility.md §5).
-    onFirstGesture: () => {
-      void audio.unlock();
-    },
-  });
+  // Input. Aim and fire come off the 3D canvas via the view's fixed aim camera; the keyboard is
+  // bound here too, so menus and gameplay share one event stream and no keystroke is delivered
+  // twice. UI buttons handle their own clicks and are unaffected.
   if (canvas3d) {
     createInput(
       canvas3d,
       { screenToWorld: (sx, sy) => (view ? view.screenToWorld(sx, sy) : { x: 192, y: 108 }) },
-      { onEvent: (e) => manager.routeInput(e), onFirstGesture: () => void audio.unlock(), keyboard: false },
+      { onEvent: (e) => manager.routeInput(e) },
     );
   }
 
-  // Viewport: drive resize from visualViewport (handles the iOS URL-bar reflow).
+  // Audio unlock is bound to the document, not the canvas: on a touch device the very first gesture
+  // of a session is a tap on a menu button, which the modal UI layer consumes before the canvas ever
+  // sees it. iOS only resumes an AudioContext from a synchronous in-gesture call
+  // (compatibility.md §5), so this listener must be the one that runs first, and only once.
+  const unlockAudio = (): void => {
+    void audio.unlock();
+  };
+  for (const type of ['pointerdown', 'keydown'] as const) {
+    document.addEventListener(type, unlockAudio, { once: true, capture: true });
+  }
+
+  // Viewport: drive resize from visualViewport (handles the iOS URL-bar reflow). The rotate overlay
+  // is CSS-driven; only the 3D surface needs telling.
   const resize = (): void => {
     const vw = window.visualViewport?.width ?? window.innerWidth;
     const vh = window.visualViewport?.height ?? window.innerHeight;
-    scaler.resize(vw, vh);
     view?.resize(vw, vh);
   };
   resize();
@@ -205,21 +207,29 @@ function main(): void {
 
   // Fixed-timestep loop; logic only ever sees a constant dt via stepLoop.
   let accumulator = 0;
+  let alpha = 0;
   let prev = performance.now();
+  // Every shell scene wants the same slow cinematic orbit behind its panels; only Playing drives
+  // its own camera (intro crane, then shooting, then interior). Deriving the state from the active
+  // scene here keeps five scene modules free of a ThreeView dependency they would otherwise only
+  // use for one line each — and the director blends, so a transition is never a cut.
+  let cameraScene = '';
   const frame = (now: number): void => {
     const frameDt = (now - prev) / 1000;
     prev = now;
     if (!paused) {
       const step = stepLoop(accumulator, frameDt, (dt) => manager.update(dt, ctx));
       accumulator = step.accumulator;
-      renderer.setAlpha(step.alpha);
+      alpha = step.alpha;
     }
-    manager.render(renderer);
-    // The 3D world + DOM HUD show only while Playing. The scene toggles the 3D canvas + overlay root;
-    // here we toggle the HUD host (#hud) and hide the pixel-art 2D canvas so menus never bleed through.
-    const playing = manager.active === 'Playing';
-    canvas.style.visibility = playing ? 'hidden' : 'visible';
-    if (hudHost) hudHost.style.display = playing ? 'block' : 'none';
+    if (manager.active !== cameraScene) {
+      cameraScene = manager.active;
+      if (cameraScene !== 'Playing') view?.setCameraState('menu');
+    }
+    manager.render(alpha);
+    // The DOM HUD shows only while Playing; the 3D world is continuous, and the scene picks the
+    // camera state for it.
+    if (hudHost) hudHost.style.display = manager.active === 'Playing' ? 'block' : 'none';
     requestAnimationFrame(frame);
   };
   requestAnimationFrame(frame);
