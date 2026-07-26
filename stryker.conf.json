@@ -12,6 +12,8 @@
     "src/render/scaler.ts",
     "src/state/scene-manager.ts",
     "src/ui/shell/menu-model.ts",
+    "src/render/three/mapping.ts",
+    "src/render/three/camera-director.ts",
     "!src/**/*.test.ts",
     "!src/test-support/**/*.ts"
   ],

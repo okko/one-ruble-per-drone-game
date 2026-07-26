@@ -27,6 +27,29 @@ import type { Content } from '../../content/loader';
 import type { GameState } from '../../state/game-state';
 import type { PlayingViewState } from '../../state/playing-view';
 import type { Vec2 } from '../../core/math';
+import {
+  ACTION_Z,
+  ARENA_CX,
+  AS,
+  ax,
+  ay,
+  floorSlabY,
+  GROUND_Y,
+  POST_Y,
+  ROOF_DECK_THICKNESS,
+  ROOF_DECK_TOP_Y,
+  ROOF_DECK_Y,
+  ROOF_Y,
+  SKYLINE_Z,
+  STOREYS,
+  STORY_H,
+  toArena,
+  TOWER_D,
+  TOWER_W,
+  TOWER_X,
+  TOWER_Z,
+} from './mapping';
+import { createCameraDirector, type CameraState } from './camera-director';
 
 export interface ThreeView {
   /** Resize the renderer to the CSS viewport (rendered at the device's native pixel ratio). */
@@ -35,30 +58,17 @@ export interface ThreeView {
   screenToWorld(canvasX: number, canvasY: number): Vec2;
   /** Draw one frame from the current state + interaction view model. */
   render(gs: GameState, alpha: number, vs: PlayingViewState): void;
+  /**
+   * Ask the camera director to head for a framing. The scenes drive this — the view never guesses
+   * what the app is doing (docs/areas/11-art-visual-style.md §3.7).
+   */
+  setCameraState(state: CameraState): void;
   /** Begin the opening fly-up (ground floor → rooftop post); called when a run starts. */
   startIntro(): void;
   setVisible(visible: boolean): void;
   dispose(): void;
 }
 
-// ---- Arena → world mapping ------------------------------------------------------------------
-const ARENA_W = 384;
-const ARENA_CX = ARENA_W / 2;
-const POST_Y = 196; // arena y of the firing post (gun pivot) — maps to the tower roof
-const AS = 0.09; // arena px → world units
-const STORY_H = 0.95; // world height of one tower storey
-const ROOF_Y = 32 * STORY_H; // the soldier tower roof (gun height) in world units
-const ACTION_Z = 0; // the plane drones/gun/projectiles live on (exact aim raycast target)
-const SKYLINE_Z = -16; // far Moscow skyline depth
-const TOWER_Z = -3.5; // the soldier's tower sits BEHIND the action plane, so the soldier stands in
-// front of it on the roof (visible + aimable) and its cut-away face still opens toward the camera.
-
-function ax(x: number): number {
-  return (x - ARENA_CX) * AS;
-}
-function ay(y: number): number {
-  return ROOF_Y + (POST_Y - y) * AS;
-}
 function col(key: PaletteKey): THREE.Color {
   return new THREE.Color(PALETTE[key]);
 }
@@ -72,6 +82,7 @@ function noopView(canvas: HTMLCanvasElement): ThreeView {
     resize() {},
     screenToWorld: () => ({ x: ARENA_CX, y: POST_Y }),
     render() {},
+    setCameraState() {},
     startIntro() {},
     setVisible(visible: boolean): void {
       canvas.style.display = visible ? 'block' : 'none';
@@ -132,9 +143,8 @@ export function createThreeView(canvas: HTMLCanvasElement, content: Content): Th
   sunSprite.position.set(40, ROOF_Y + 26, -120);
   scene.add(sunSprite);
 
-  // Ground: every tower stands on world Y = GROUND_Y. The skyline + the soldier's tower share it, so
-  // nothing sits underground (drones/the gun still map ABOVE it via ay()).
-  const GROUND_Y = 0;
+  // Ground: every tower stands on world Y = GROUND_Y (see ./mapping). The skyline + the soldier's
+  // tower share it, so nothing sits underground (drones/the gun still map ABOVE it via ay()).
   const ground = new THREE.Mesh(
     new THREE.PlaneGeometry(800, 400),
     new THREE.MeshStandardMaterial({ color: col('ink') }),
@@ -179,30 +189,28 @@ export function createThreeView(canvas: HTMLCanvasElement, content: Content): Th
   // ---- Near layer: the soldier's 32-storey cut-away tower -----------------------------------
   const towerGroup = new THREE.Group();
   scene.add(towerGroup);
-  const TW = 60 * AS; // tower footprint width
-  const TD = 26 * AS; // depth
+  const TW = TOWER_W; // tower footprint width
+  const TD = TOWER_D; // depth
   // The tower stands ON the ground (base at GROUND_Y) and rises 32 storeys to the roof at ROOF_Y, where
   // the gun is. Floor 32's ceiling IS the roof deck; the soldier stands on top of it (storey 33), in the
   // open — not inside the building. (ROOF_Y == 32·STORY_H, so the base lands exactly on the ground.)
-  const towerBaseY = GROUND_Y;
-  const ROOF_DECK_Y = towerBaseY + 32 * STORY_H; // == ROOF_Y
-  const towerX = ax(ARENA_CX);
+  const towerX = TOWER_X;
   // Back + side walls (front omitted → the cut-away reveals the floors).
   const wallMat = new THREE.MeshStandardMaterial({ color: col('concreteDk'), flatShading: true });
   const back = new THREE.Mesh(new THREE.BoxGeometry(TW, ROOF_Y, 0.2), wallMat);
-  back.position.set(towerX, towerBaseY + ROOF_Y / 2, TOWER_Z - TD / 2);
+  back.position.set(towerX, GROUND_Y + ROOF_Y / 2, TOWER_Z - TD / 2);
   towerGroup.add(back);
   for (const sx of [-1, 1]) {
     const side = new THREE.Mesh(new THREE.BoxGeometry(0.2, ROOF_Y, TD), wallMat);
-    side.position.set(towerX + (sx * TW) / 2, towerBaseY + ROOF_Y / 2, TOWER_Z);
+    side.position.set(towerX + (sx * TW) / 2, GROUND_Y + ROOF_Y / 2, TOWER_Z);
     towerGroup.add(side);
   }
   // Floor slabs + a highlight strip per floor (lets the current floor glow in interior mode).
-  const floorHi: THREE.Mesh[] = []; // index 1..32 (floor number); 0 unused
-  floorHi.length = 33;
+  const floorHi: THREE.Mesh[] = []; // index 1..STOREYS (floor number); 0 unused
+  floorHi.length = STOREYS + 1;
   const occupantByFloor = new Map(content.economy.roster.map((r) => [r.floor, r] as const));
-  for (let f = 1; f <= 32; f++) {
-    const y = towerBaseY + (f - 1) * STORY_H;
+  for (let f = 1; f <= STOREYS; f++) {
+    const y = floorSlabY(f);
     const deck = new THREE.Mesh(
       new THREE.BoxGeometry(TW, 0.12, TD),
       new THREE.MeshStandardMaterial({ color: col('shadow'), flatShading: true }),
@@ -229,12 +237,13 @@ export function createThreeView(canvas: HTMLCanvasElement, content: Content): Th
     }
   }
 
-  // Roof deck capping floor 32 (the rooftop the soldier stands on) + a low sandbag parapet.
+  // Roof deck capping the top floor (the rooftop the soldier stands on) + a low sandbag parapet. Its
+  // top face is ROOF_DECK_TOP_Y — the surface everything on the roof is placed against.
   const roofDeck = new THREE.Mesh(
-    new THREE.BoxGeometry(TW, 0.4, TD),
+    new THREE.BoxGeometry(TW, ROOF_DECK_THICKNESS, TD),
     new THREE.MeshStandardMaterial({ color: col('concrete'), flatShading: true }),
   );
-  roofDeck.position.set(towerX, ROOF_DECK_Y + 0.2, TOWER_Z);
+  roofDeck.position.set(towerX, ROOF_DECK_Y, TOWER_Z);
   towerGroup.add(roofDeck);
   const parapetMat = new THREE.MeshStandardMaterial({ color: col('uniformDk'), flatShading: true });
   for (const [dx, dz, w, d] of [
@@ -243,7 +252,7 @@ export function createThreeView(canvas: HTMLCanvasElement, content: Content): Th
     [TW / 2, 0, 0.25, TD],
   ] as const) {
     const rail = new THREE.Mesh(new THREE.BoxGeometry(w, 0.9, d), parapetMat);
-    rail.position.set(towerX + dx, ROOF_DECK_Y + 0.6, TOWER_Z + dz);
+    rail.position.set(towerX + dx, ROOF_DECK_TOP_Y + 0.45, TOWER_Z + dz);
     towerGroup.add(rail);
   }
 
@@ -253,21 +262,25 @@ export function createThreeView(canvas: HTMLCanvasElement, content: Content): Th
   // the projectile loop below reconciles tracers from this muzzle into that plane (see FIRE_BLEND).
   const post = content.combat.gun.pivot; // arena-space firing column the sim spawns projectiles from
   const BARREL_LEN = 2.4; // barrel length & muzzle reach (tip distance from the yaw pivot)
+  /** Height of the gun's yaw pivot above the roof deck's top face. */
+  const GUN_PIVOT_H = 0.5;
   // Arena units over which a tracer sheds the muzzle offset and settles into the action plane. Spread
   // across the whole engagement range (gun→arena-top is ~196) so the depth correction is a shallow,
   // straight diagonal rather than a sharp z-step right off the barrel — the join lands off-screen.
   const FIRE_BLEND = 220;
   const gunPivot = new THREE.Group();
-  gunPivot.position.set(ax(post.x), ROOF_DECK_Y + 0.9, TOWER_Z);
+  gunPivot.position.set(ax(post.x), ROOF_DECK_TOP_Y + GUN_PIVOT_H, TOWER_Z);
   scene.add(gunPivot);
+  const SOLDIER_R = 0.55;
+  const SOLDIER_BODY = 1.3;
   const soldier = new THREE.Mesh(
-    new THREE.CapsuleGeometry(0.55, 1.3, 4, 8),
+    new THREE.CapsuleGeometry(SOLDIER_R, SOLDIER_BODY, 4, 8),
     new THREE.MeshStandardMaterial({ color: col('uniform'), flatShading: true }),
   );
-  // Centre of the deck, feet on its top face. gunPivot is already at (towerX, ROOF_DECK_Y+0.9, TOWER_Z),
-  // so x/z offsets are 0; deck top is ROOF_DECK_Y+0.4 and the capsule half-height is 1.3/2+0.55=1.2, so
-  // y = (0.4+1.2)−0.9 = 0.7.
-  soldier.position.set(0, 0.7, 0);
+  // Centre of the deck, feet on its top face. The capsule's origin is its middle, so lift it by half
+  // its total height above ROOF_DECK_TOP_Y — derived, never a literal, so retuning the deck or the
+  // figure keeps his boots on the floor (docs/areas/11-art-visual-style.md §3.4).
+  soldier.position.set(0, ROOF_DECK_TOP_Y + SOLDIER_BODY / 2 + SOLDIER_R - gunPivot.position.y, 0);
   gunPivot.add(soldier);
   const barrel = new THREE.Mesh(
     new THREE.CylinderGeometry(0.18, 0.18, BARREL_LEN, 8),
@@ -308,44 +321,45 @@ export function createThreeView(canvas: HTMLCanvasElement, content: Content): Th
     }
   }
 
-  // ---- Camera poses -------------------------------------------------------------------------
-  // High + behind the soldier, looking down-and-forward over the rooftop post: the soldier on his roof
-  // sits in the foreground, the grounded Moscow skyline fills the mid-frame, drones dive from the sky.
-  const shootEye = new THREE.Vector3(0, ROOF_Y + 11, 30);
-  const shootLook = new THREE.Vector3(0, ROOF_Y - 4, -14);
-  aimCamera.position.copy(shootEye);
-  aimCamera.lookAt(shootLook);
+  // ---- Camera --------------------------------------------------------------------------------
+  // One director owns every framing (menu orbit, opening crane, shooting, interior, pause). See
+  // ./camera-director — the pose maths lives there, free of three.js, so it can be proven by test.
+  const director = createCameraDirector('shooting', { floor: STOREYS, time: 0 });
+  // The aim camera is DERIVED from the director's aim pose and never touched again. Copying the
+  // shooting numbers here by hand is how aiming and framing quietly drift apart.
+  const aim = director.aimPose;
+  aimCamera.position.set(aim.eye.x, aim.eye.y, aim.eye.z);
+  aimCamera.lookAt(aim.look.x, aim.look.y, aim.look.z);
+  aimCamera.fov = aim.fov;
+  aimCamera.updateProjectionMatrix();
 
   const ray = new THREE.Raycaster();
   const actionPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), -ACTION_Z);
   let cssW = 1;
   let cssH = 1;
 
-  // Opening fly-up: a low shot at the tower's ground floor, craning up the cut-away to the rooftop post.
+  // The opening crane holds at the `intro` pose, then hands off to `shooting`.
   const INTRO_DUR = 2.6;
-  const introEye = new THREE.Vector3(towerX, GROUND_Y + 3, TOWER_Z + 22);
-  const introLook = new THREE.Vector3(towerX, GROUND_Y + 13, TOWER_Z);
   let introT = 1; // 1 = finished; startIntro() resets to 0
-  // Smoothed camera lerp factor: 0 = shooting, 1 = interior.
-  let camT = 0;
+  const lookAt = new THREE.Vector3();
 
-  function updateCamera(vs: PlayingViewState, dt: number): void {
-    // Opening pan from the ground floor up to the roof, then hand off to the normal framing.
+  function updateCamera(vs: PlayingViewState, dt: number, now: number): void {
     if (introT < 1) {
       introT = Math.min(1, introT + dt / INTRO_DUR);
-      const e = introT * introT * (3 - 2 * introT); // smoothstep
-      camera.position.lerpVectors(introEye, shootEye, e);
-      camera.lookAt(new THREE.Vector3().lerpVectors(introLook, shootLook, e));
-      return;
+      if (introT >= 1) director.setState('shooting');
+    } else if (director.state === 'intro' || director.state === 'shooting' || director.state === 'interior') {
+      // While a run is live the mode drives the framing; menu/pause are set by the scenes.
+      director.setState(vs.mode === 'interior' ? 'interior' : 'shooting');
     }
-    const target = vs.mode === 'interior' ? 1 : 0;
-    camT += (target - camT) * Math.min(1, dt * 6);
-    const floorY = towerBaseY + (vs.floor - 1) * STORY_H + STORY_H / 2;
-    const inEye = new THREE.Vector3(towerX, floorY + 1.2, TOWER_Z + 9);
-    const inLook = new THREE.Vector3(towerX, floorY, TOWER_Z);
-    camera.position.lerpVectors(shootEye, inEye, camT);
-    const look = new THREE.Vector3().lerpVectors(shootLook, inLook, camT);
-    camera.lookAt(look);
+
+    director.update(dt, { floor: vs.floor, time: now });
+    const pose = director.pose;
+    camera.position.set(pose.eye.x, pose.eye.y, pose.eye.z);
+    camera.lookAt(lookAt.set(pose.look.x, pose.look.y, pose.look.z));
+    if (camera.fov !== pose.fov) {
+      camera.fov = pose.fov;
+      camera.updateProjectionMatrix();
+    }
   }
 
   let lastT = 0;
@@ -448,7 +462,7 @@ export function createThreeView(canvas: HTMLCanvasElement, content: Content): Th
     }
 
     // Highlight the floor being visited.
-    for (let f = 1; f <= 32; f++) {
+    for (let f = 1; f <= STOREYS; f++) {
       const glow = floorHi[f];
       if (glow && glow.material instanceof THREE.MeshStandardMaterial) {
         const lit = vs.mode === 'interior' && f === vs.floor;
@@ -456,7 +470,7 @@ export function createThreeView(canvas: HTMLCanvasElement, content: Content): Th
       }
     }
 
-    updateCamera(vs, dt);
+    updateCamera(vs, dt, now);
     renderer.render(scene, camera);
   }
 
@@ -476,15 +490,19 @@ export function createThreeView(canvas: HTMLCanvasElement, content: Content): Th
     ray.setFromCamera(ndc, aimCamera);
     const hit = new THREE.Vector3();
     if (!ray.ray.intersectPlane(actionPlane, hit)) return { x: ARENA_CX, y: 60 };
-    return { x: hit.x / AS + ARENA_CX, y: POST_Y - (hit.y - ROOF_Y) / AS };
+    return toArena(hit.x, hit.y);
   }
 
   return {
     resize,
     screenToWorld,
     render,
+    setCameraState(state: CameraState): void {
+      director.setState(state);
+    },
     startIntro(): void {
       introT = 0;
+      director.setState('intro', { immediate: true });
     },
     setVisible(visible: boolean): void {
       canvas.style.display = visible ? 'block' : 'none';

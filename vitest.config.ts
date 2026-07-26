@@ -32,6 +32,11 @@ export default defineConfig({
         // Presentation overhaul: the pure UI modules that carry the gate as the
         // Canvas-2D pipeline is retired (docs/testing.md §3).
         'src/ui/shell/menu-model.ts',
+        // The presentation maths of the three.js layer: pure, three.js-free modules extracted so the
+        // arena↔world mapping and the camera states are proven by test rather than by eye
+        // (docs/testing.md §3).
+        'src/render/three/mapping.ts',
+        'src/render/three/camera-director.ts',
       ],
       // game-state.ts is pure interfaces (no runtime); test-support helpers are not product logic.
       exclude: ['**/*.test.ts', '**/__fixtures__/**', 'src/test-support/**'],
