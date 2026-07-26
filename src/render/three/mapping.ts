@@ -46,8 +46,22 @@ export const ROOF_DECK_Y = ROOF_Y + ROOF_DECK_THICKNESS / 2;
  */
 export const ROOF_DECK_TOP_Y = ROOF_Y + ROOF_DECK_THICKNESS;
 
-/** Depth of the plane the drones, projectiles, and aim raycast live on. */
-export const ACTION_Z = 0;
+/**
+ * Depth of the plane the drones, projectiles, and aim raycast live on.
+ *
+ * It sits just IN FRONT OF the skyline, not out in the middle of the gap. The drones' whole job is
+ * to dive at those buildings, and while the plane was up at z = 0 they could not read as doing it:
+ * a drone and the tower it was about to hit were sixteen units apart in depth, so the drone hung in
+ * empty sky, huge and near, while its target sat small and far below it. Nothing about the two
+ * looked connected. Three units of clearance is enough to keep a drone's body (radius under 1.3
+ * world units) clear of the deepest facade (half-depth ~1.2 at SKYLINE_Z) without letting the gap
+ * reopen.
+ *
+ * Moving this is not free: it is what the aim raycast intersects, so the whole screen→arena mapping
+ * moves with it — correctly, and automatically, which is exactly why the plane is a constant here
+ * rather than a literal at the raycast.
+ */
+export const ACTION_Z = -13;
 /** Depth of the far Moscow skyline the drones dive at. */
 export const SKYLINE_Z = -16;
 /**

@@ -43,6 +43,12 @@ export interface VfxView {
   explode(x: number, y: number, z: number, scale: number): void;
   /** A round struck a tower: a small, sharp spray of concrete and sparks. */
   impact(x: number, y: number, z: number): void;
+  /**
+   * A drone got through and went off against a tower: dust up, rubble down, and no shockwave.
+   *
+   * The counterpart to `explode`, and it has to look nothing like it — see the body for why.
+   */
+  strike(x: number, y: number, z: number, scale: number): void;
   advance(dt: number): void;
   dispose(): void;
 }
@@ -205,6 +211,20 @@ export function createVfx(scene: THREE.Scene): VfxView {
     impact(x: number, y: number, z: number): void {
       emitBurst(hotField, { x, y, z, count: 5, kind: SPARK, speed: 5, life: 0.18, size: 1, rise: 0.4 });
       emitBurst(smokeField, { x, y, z, count: 2, kind: SMOKE, speed: 0.8, life: 0.6, size: 1, rise: 0.6 });
+    },
+    strike(x: number, y: number, z: number, scale: number): void {
+      const size = Math.max(0.5, scale);
+      // Deliberately NOT an explosion. A kill and a hit-taken are the two outcomes of the same event
+      // — a drone stops existing — and if they look alike the player cannot tell a good shift from a
+      // bad one. So this is built out of the opposite half of the vocabulary: a slow grey dust column
+      // instead of a fast additive flash, debris FALLING instead of a shockwave expanding, and no
+      // ring at all. The ring is the signature of a clean airburst and it is reserved for one.
+      emitBurst(smokeField, { x, y, z, count: 18, kind: SMOKE, speed: 2.6 * size, life: 1.9, size: 1.5, rise: 0.6 });
+      // Negative rise. `emitBurst` biases the vertical spread by it, so this throws burning rubble
+      // DOWN the face of the building it just came off, which is the read: something hit the tower,
+      // and the tower is shedding.
+      emitBurst(hotField, { x, y, z, count: 10, kind: EMBER, speed: 3.4 * size, life: 1.2, size: 1.1, rise: -0.5 });
+      emitBurst(hotField, { x, y, z, count: 6, kind: SPARK, speed: 4 * size, life: 0.24, size: 0.9, rise: -0.2 });
     },
     advance(dt: number): void {
       advanceField(hotField, dt, GRAVITY);

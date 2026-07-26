@@ -25,7 +25,7 @@ import * as THREE from 'three';
 
 import { boxesAlive, cityLayoutFor, clutterOffset, type CityBox, type CityLayout } from './city-layout';
 import { AS, ax, ay, GROUND_Y, SKYLINE_Z } from './mapping';
-import { colorOf, type WorldColorKey } from './theme';
+import { colorOf, mixInto, type WorldColorKey } from './theme';
 import type { DetailTextures } from './assets';
 
 /** The subset of a skyline building this module needs. Matches both the content table and the state. */
@@ -46,8 +46,17 @@ export interface CityDamage {
 export interface CityView {
   /** Hand over the generated maps once (and if) they arrive. Safe to never call. */
   applyDetail(textures: DetailTextures): void;
-  /** Per frame: apply damage and the night-time window glow. */
-  update(buildings: readonly CityDamage[], windowGlow: number): void;
+  /** Per frame: apply damage, decay any strike flash, and apply the night-time window glow. */
+  update(buildings: readonly CityDamage[], windowGlow: number, dt: number): void;
+  /**
+   * A drone just reached this tower and went off against it.
+   *
+   * Lights the tower for a moment and reports the world point its — now shorter — roof is at, which
+   * is where the impact belongs. Call it AFTER `update` for the frame, so the point is the roof the
+   * strike left behind rather than the one it took away. Returns null for an id the city does not
+   * have, which the caller should treat as "draw nothing" rather than as an error.
+   */
+  strike(id: number): { x: number; y: number; z: number } | null;
   dispose(): void;
 }
 
@@ -71,6 +80,15 @@ interface ZoneEntry {
 }
 
 const HIDDEN = new THREE.Matrix4().makeScale(0, 0, 0);
+
+/**
+ * How long a struck tower burns, in seconds.
+ *
+ * Short. The flash is a receipt, not a fire: it has to be unmistakable in the instant it happens and
+ * gone before the player's eye comes back, or eight towers taking hits over a shift would leave the
+ * whole skyline permanently lit and the signal would mean nothing.
+ */
+const STRIKE_FLASH_S = 0.55;
 
 /** Onion profile, normalised to a unit radius and a unit height, drawn base-first. */
 const DOME_PROFILE: readonly (readonly [number, number])[] = [
@@ -198,6 +216,10 @@ export function createCity(
   const facades: THREE.InstancedMesh[] = [];
   const facadeMats: THREE.MeshStandardMaterial[] = [];
   const surviving: number[] = [];
+  /** Per building: its world x, kept so a strike can be placed without re-deriving it. */
+  const centres: number[] = [];
+  /** Per building: seconds of strike flash left. Decays in `update`; see `strike`. */
+  const flashes: number[] = [];
   /** False until the generated window mask lands; see the fallback in `update`. */
   let windowed = false;
 
@@ -217,6 +239,8 @@ export function createCity(
     surviving.push(layout.storeys);
 
     const x = ax(b.x);
+    centres.push(x);
+    flashes.push(0);
     // Alternating body tones, as before. Two colours over eight towers is enough to separate them
     // without turning a skyline into a colour chart.
     const material = new THREE.MeshStandardMaterial({
@@ -367,7 +391,7 @@ export function createCity(
       windowed = true;
     },
 
-    update(buildings: readonly CityDamage[], windowGlow: number): void {
+    update(buildings: readonly CityDamage[], windowGlow: number, dt: number): void {
       for (const b of buildings) {
         const index = indexById.get(b.id);
         if (index === undefined) continue;
@@ -384,13 +408,39 @@ export function createCity(
         // Only the emissive strength moves with the day; the map itself never changes. Without the
         // generated mask there are no panes to light, so the whole facade glows faintly instead —
         // far weaker, but night still has to read as lit-from-within rather than as a silhouette.
-        if (material) material.emissiveIntensity = windowGlow * (windowed ? 1 : 0.16);
+        if (!material) continue;
+        const flash = Math.max(0, (flashes[index] ?? 0) - dt);
+        flashes[index] = flash;
+        // A struck tower glows hot for a moment on TOP of whatever the hour is giving it. Riding the
+        // emissive rather than the base colour is what keeps it visible in daylight, when a tint
+        // would be washed out by the sun and the player would learn nothing from it.
+        const hurt = flash / STRIKE_FLASH_S;
+        material.emissiveIntensity = windowGlow * (windowed ? 1 : 0.16) + hurt * hurt * 2.2;
+        mixInto(material.emissive, 'windowLit', 'explOrange', hurt);
       }
       for (const zone of zones) {
         if (!zone.dirty) continue;
         zone.mesh.instanceMatrix.needsUpdate = true;
         zone.dirty = false;
       }
+    },
+
+    strike(id: number): { x: number; y: number; z: number } | null {
+      const index = indexById.get(id);
+      if (index === undefined) return null;
+      const layout = layouts[index];
+      const x = centres[index];
+      if (!layout || x === undefined) return null;
+      flashes[index] = STRIKE_FLASH_S;
+      return {
+        x,
+        // The roof that is left, not the one that was there a moment ago — so the dust comes off the
+        // new stump. `surviving` is already this frame's value because `update` ran first.
+        y: GROUND_Y + (surviving[index] ?? layout.storeys) * layout.storeyHeight,
+        // Pulled to the near face. A plume that started at the tower's centre line would spend its
+        // first half-second inside the tower and only then appear, from nowhere, in front of it.
+        z: SKYLINE_Z + layout.depth / 2,
+      };
     },
 
     dispose(): void {

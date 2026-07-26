@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { ENV_STEPS, envStepFor, FOG_FAR, FOG_NEAR, rigFor, sunDirectionFor } from './lighting';
+import { SKYLINE_Z, TOWER_Z } from './mapping';
 
 describe('the day/night light rig', () => {
   it('opens the stop as the day brightens, and never slams it shut', () => {
@@ -81,10 +82,13 @@ describe('the day/night light rig', () => {
     expect(rigFor(0).fogColor.from).toBe('skyNightMid');
   });
 
-  it('keeps the action plane clear of haze', () => {
-    // The shooting camera is 16 units from the action plane (TOWER_Z + 3 to ACTION_Z). §3.1 says
-    // drone-vs-sky contrast survives, so the fog must not start until well past it.
-    expect(FOG_NEAR).toBeGreaterThan(16);
+  it('keeps the whole fight clear of haze', () => {
+    // §3.1 says drone-vs-sky contrast survives, and the drones now fly just in front of the city, so
+    // the fog must not start until past the city itself. Derived from the mapping rather than written
+    // down: moving the drone field again must move this bound with it, or the targets start
+    // dissolving into the horizon and nothing here would say so.
+    const cityDistance = TOWER_Z + 3 - SKYLINE_Z;
+    expect(FOG_NEAR).toBeGreaterThan(cityDistance);
     expect(FOG_FAR).toBeGreaterThan(FOG_NEAR);
   });
 });

@@ -29,6 +29,7 @@ import type { Vec2 } from '../../core/math';
 import {
   ACTION_Z,
   ARENA_CX,
+  AS,
   ax,
   ay,
   floorSlabY,
@@ -363,7 +364,7 @@ export function createThreeView(
   // ---- The gun + soldier ON the roof deck (storey 33) -----------------------------------------
   // The whole post sits on the deck at the tower depth (TOWER_Z), centred on the firing column
   // (ax(pivot.x) == towerX == 0). It fires OUT into the action plane (ACTION_Z) where the drones are;
-  // the projectile loop below reconciles tracers from this muzzle into that plane (see FIRE_BLEND).
+  // the projectile loop below draws each tracer along its own bore line into that plane.
   //
   // Everything here is sized against SOLDIER_H. One world unit is roughly 3.3 m (32 storeys of
   // STORY_H make the tower), so the gun is a ~3 m barrel on a chest-high mount — a weapon a man can
@@ -372,10 +373,19 @@ export function createThreeView(
   const BARREL_LEN = SOLDIER_H * 1.55; // barrel length & muzzle reach (tip distance from the yaw pivot)
   /** Height of the gun's yaw pivot above the roof deck's top face — the soldier's chest. */
   const GUN_PIVOT_H = SOLDIER_H * 0.62;
-  // Arena units over which a tracer sheds the muzzle offset and settles into the action plane. Spread
-  // across the whole engagement range (gun→arena-top is ~196) so the depth correction is a shallow,
-  // straight diagonal rather than a sharp z-step right off the barrel — the join lands off-screen.
-  const FIRE_BLEND = 220;
+  /**
+   * Nominal engagement range, in arena units, that the barrel is pointed at.
+   *
+   * The simulation's aim is an ANGLE, not a target, so a range has to be chosen to turn it into the
+   * point the barrel looks at. It only sets how much of the elevation is depression versus depth, and
+   * the drones are engaged over roughly a third to two thirds of the arena's width, so the middle of
+   * that band is the honest answer and nothing in the fight is sensitive to it.
+   *
+   * It is also the distance over which a tracer sheds its muzzle offset (see the projectile loop),
+   * and that is not a coincidence: shedding it over exactly the range the barrel looks at is what
+   * makes the drawn path the straight line from the muzzle to the aim point — the bore line.
+   */
+  const AIM_RANGE = 150;
   const gunPivot = new THREE.Group();
   gunPivot.position.set(ax(post.x), ROOF_DECK_TOP_Y + GUN_PIVOT_H, TOWER_Z);
   scene.add(gunPivot);
@@ -402,6 +412,39 @@ export function createThreeView(
   soldier.group.position.copy(roofSpot);
 
   const barrelYaw = weapon.yaw;
+  const barrelPitch = weapon.pitch;
+
+  /**
+   * Where the muzzle sits, and how the barrel must be turned, for a shot laid at arena angle `angle`.
+   *
+   * Written into a scratch record rather than returned, because the projectile loop calls it once per
+   * round in flight and the render loop must not allocate.
+   *
+   * Both angles come out of ONE target point, on purpose. Setting the yaw from the arena angle and
+   * then finding an elevation separately — which is what this did first — makes horizontal target
+   * motion roll the barrel about the view axis instead of swinging it. Yaw about z sends the barrel's
+   * +y to (−sin a, cos a, 0); pitching about the yawed frame's own x then gives
+   * (−sin a·cos p, cos a·cos p, sin p). Reading that backwards from the direction to the target is
+   * the whole solve: p = asin(z), a = atan2(−x, y).
+   */
+  const muzzle = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0 };
+  function solveMuzzle(angle: number): void {
+    // The point being shot at: out along the aim, down on the plane the drones live on. Arena angle θ
+    // maps to world (cos θ, −sin θ) — arena y is down, world y is up.
+    const dx = ax(post.x) + Math.cos(angle) * AIM_RANGE * AS - gunPivot.position.x;
+    const dy = ay(post.y) - Math.sin(angle) * AIM_RANGE * AS - gunPivot.position.y;
+    const dz = ACTION_Z - gunPivot.position.z;
+    const len = Math.hypot(dx, dy, dz);
+    const pitch = Math.asin(dz / len);
+    const yaw = Math.atan2(-dx, dy);
+    const reach = weapon.muzzleReach;
+    const cosP = Math.cos(pitch);
+    muzzle.yaw = yaw;
+    muzzle.pitch = pitch;
+    muzzle.x = gunPivot.position.x - reach * Math.sin(yaw) * cosP;
+    muzzle.y = gunPivot.position.y + reach * Math.cos(yaw) * cosP;
+    muzzle.z = gunPivot.position.z + reach * Math.sin(pitch);
+  }
 
   // ---- The dressing around the post ------------------------------------------------------------
   const rooftop = createRooftop(scene, {
@@ -436,12 +479,27 @@ export function createThreeView(
   const DRONE_CAPACITY = 24;
   const drones = createDrones(scene, DRONE_CAPACITY);
   const sightings: DroneSighting[] = [];
-  /** Drones drawn last frame, by id. What LEAVES this map is what exploded. */
-  const lastSeen = new Map<number, { pos: { x: number; y: number }; radius: number }>();
+  /** Drones drawn last frame, by id, as our OWN copies. What LEAVES this map is what stopped flying. */
+  const lastSeen = new Map<number, { x: number; y: number; radius: number }>();
   const seenNow = new Set<number>();
+  /** Last frame's damage per tower, so a rise can be spotted. See the strike block in the loop. */
+  const prevCut = new Map<number, number>();
+  /** Towers that took a hit this frame. Reused; never reallocated. */
+  const struckNow: { id: number; x: number; width: number }[] = [];
+  /**
+   * Slack, in arena units, on "was this drone over that tower when it vanished?"
+   *
+   * A drone detonating against a roof is not exactly above its centre, and the alternative to a
+   * tolerance is to plumb the sim's own target id through to the renderer for a cosmetic decision.
+   * Erring wide is the cheap direction: the worst case is a kill scored right over a tower that was
+   * being hit anyway showing dust instead of an airburst, in a frame where dust is already correct.
+   */
+  const STRIKE_REACH = 14;
   const vfx = createVfx(scene);
   const projGeo = new THREE.SphereGeometry(0.12, 6, 4);
   const projMat = new THREE.MeshBasicMaterial({ color: colorOf('flash') });
+  /** Distance the tracer sphere is modelled at. See the scale in the projectile loop. */
+  const PROJ_REF_DIST = TOWER_Z + 3 - ACTION_Z;
   const projPool: THREE.Mesh[] = [];
 
   // ---- Camera --------------------------------------------------------------------------------
@@ -455,6 +513,15 @@ export function createThreeView(
   aimCamera.lookAt(aim.look.x, aim.look.y, aim.look.z);
   aimCamera.fov = aim.fov;
   aimCamera.updateProjectionMatrix();
+  // NOT optional, and its absence was a real bug: this camera is deliberately kept OUT of the scene
+  // so no framing change can touch it, which also means the renderer never walks it and nothing else
+  // will ever refresh its world matrix. `Raycaster.setFromCamera` reads exactly that matrix — for the
+  // ray's origin AND for unprojecting its direction — so while it sat at the identity every pointer
+  // aim was cast from the world origin looking down -z instead of from the soldier's eye. With the
+  // action plane at z = 0 that ray began ON the plane, so the hit was the origin and EVERY pointer
+  // position aimed at the same spot; the fault hid behind the keyboard controls the game is usually
+  // driven by. One call is enough because the pose is fixed for the lifetime of the view.
+  aimCamera.updateMatrixWorld(true);
 
   const ray = new THREE.Raycaster();
   const actionPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), -ACTION_Z);
@@ -665,7 +732,23 @@ export function createThreeView(
 
     // Skyline damage and the night glow. Both are the city's business; see ./city for how "this
     // tower has lost four floors" became one integer instead of a hundred visibility flags.
-    city.update(c.skyline.buildings, rig.windowGlow);
+    city.update(c.skyline.buildings, rig.windowGlow, dt);
+
+    // Which towers took a hit THIS frame.
+    //
+    // Diffed rather than subscribed to. The sim does emit `buildingDamaged`, but this view is a pure
+    // consumer of state by design — it is handed a GameState and nothing else — and `cut` rising is
+    // the same fact, available without threading an event bus through the renderer. Only a RISE
+    // counts: repairs lower it, and a tower being rebuilt must not throw dust.
+    struckNow.length = 0;
+    for (const b of c.skyline.buildings) {
+      const before = prevCut.get(b.id);
+      prevCut.set(b.id, b.cut);
+      if (before === undefined || b.cut <= before) continue;
+      struckNow.push(b);
+      const at = city.strike(b.id);
+      if (at) vfx.strike(at.x, at.y, at.z, 1 + (b.cut - before) * 0.4);
+    }
 
     // Drones. Silhouettes and rotors are ./drones' business; what this loop owns is the mapping from
     // arena space into the action plane, and noticing that a drone the sim was drawing last frame is
@@ -674,7 +757,17 @@ export function createThreeView(
     seenNow.clear();
     for (const d of c.drones) {
       seenNow.add(d.id);
-      lastSeen.set(d.id, d);
+      // A COPY. The sim recycles drone objects, so holding the live one means that by the time this
+      // map is read — one frame later, to explode something that no longer exists — the position it
+      // reports may belong to whatever drone was issued the slot next.
+      const last = lastSeen.get(d.id);
+      if (last) {
+        last.x = d.pos.x;
+        last.y = d.pos.y;
+        last.radius = d.radius;
+      } else {
+        lastSeen.set(d.id, { x: d.pos.x, y: d.pos.y, radius: d.radius });
+      }
       sightings.push({
         kind: d.kind,
         x: ax(d.pos.x),
@@ -687,29 +780,26 @@ export function createThreeView(
     for (const [id, d] of lastSeen) {
       if (seenNow.has(id)) continue;
       lastSeen.delete(id);
-      // A drone leaves the list when it is shot down AND when it reaches its target and detonates.
-      // Both are explosions from where the player is sitting, so both get one.
-      vfx.explode(ax(d.pos.x), ay(d.pos.y), ACTION_Z, d.radius / 5);
+      // A drone leaves the list for two very different reasons: the player shot it down, or it got
+      // through and went off against a tower. Those used to look identical, which meant the one
+      // thing the player most needs to know — did I stop it? — was not on screen anywhere. Now a
+      // vanishing over a tower that just lost floors is the tower's story, and the dust above
+      // already tells it; anything else was a kill and gets its airburst.
+      if (struckNow.some((b) => Math.abs(d.x - b.x) < b.width / 2 + d.radius + STRIKE_REACH)) continue;
+      vfx.explode(ax(d.x), ay(d.y), ACTION_Z, d.radius / 5);
     }
     drones.update(sightings, now);
     vfx.advance(dt);
 
-    // Gun aim + muzzle flash. The barrel models +y; arena angle θ maps to world dir (cosθ, -sinθ)
-    // (arena y is down, world y is up), i.e. a z-rotation of -(θ + π/2) from the +y rest pose. The
-    // muzzle (barrel tip) is the visible source of fire; rotating +y·BARREL_LEN by aimZ gives its world
-    // point, which the tracer blend below leans on so shots leave the barrel rather than the deck.
+    // Gun aim. The barrel models +y at rest and it is now pointed at a POINT in three dimensions
+    // rather than turned to an angle in the screen plane, because those stopped being the same thing
+    // the moment the drones moved back onto the city: the post stands 26 units in FRONT of the plane
+    // they fly on, so a barrel that only ever rolled in the screen plane pointed somewhere no round
+    // ever went. `solveMuzzle` does the decomposition; see it for why both angles come from one point.
     gunPivot.visible = vs.mode === 'shooting';
-    const aimZ = -(c.aim.effectiveAngle + Math.PI / 2);
-    barrelYaw.rotation.z = aimZ;
-    const muzzleX = gunPivot.position.x - weapon.muzzleReach * Math.sin(aimZ);
-    const muzzleY = gunPivot.position.y + weapon.muzzleReach * Math.cos(aimZ);
-    const muzzleZ = gunPivot.position.z;
-    // Offset from where the sim spawns a shot (the firing column, mapped flat into the action plane) to
-    // the actual muzzle. Tracers carry this offset at spawn and shed it linearly over FIRE_BLEND, so a
-    // shot is a straight line from the barrel to its true path — never dipping back toward the post.
-    const fireOffX = muzzleX - ax(post.x);
-    const fireOffY = muzzleY - ay(post.y);
-    const fireOffZ = muzzleZ - (ACTION_Z + 0.2);
+    solveMuzzle(c.aim.effectiveAngle);
+    barrelYaw.rotation.z = muzzle.yaw;
+    barrelPitch.rotation.x = muzzle.pitch;
     // One kick per SHOT, not per firing frame. `fireCooldown` is reset upward by the sim the instant
     // a round leaves, so a rise in it is the only per-shot edge the render side can see — and it is
     // exact at every fire rate, which "firing && a timer" never was: at 12 rounds a second the old
@@ -719,10 +809,23 @@ export function createThreeView(
     advanceRecoil(recoil, dt);
     weapon.update(recoil, reducedFlash);
 
-    // Projectiles. The sim flies them from the firing column (post) along the aim in arena 2D. The gun
-    // stands on the roof at TOWER_Z while the drones fly in the ACTION_Z plane, so each tracer keeps the
-    // muzzle offset at spawn and sheds it linearly over the first FIRE_BLEND arena units of travel: it
-    // leaves the barrel as a straight shot, then settles onto its true action-plane path where it hits.
+    // Projectiles. The sim flies them from the firing column in arena 2D, which is the round's shadow
+    // on the drones' plane; the gun that fired them stands 26 units nearer the camera, on the roof. So
+    // each tracer is drawn on the line joining the two — from the muzzle, through the air, down onto
+    // its shadow — by carrying the full muzzle offset at the barrel and shedding it linearly out to
+    // AIM_RANGE, where the barrel is looking and where the offset reaches zero. Both ends move
+    // linearly with range, so what is drawn is a straight line: the bore line, and the round is on it.
+    //
+    // Two things this must NOT do, both of them tried:
+    //
+    //  - Take the offset from the CURRENT aim. Every round in the air then swings sideways with the
+    //    barrel, and a gun tracking across the sky drags its whole stream after it in a great arc —
+    //    the "rainbow". Each round is laid on the angle it was actually FIRED at instead, which its
+    //    own velocity records exactly and nothing later can disturb.
+    //  - Shed the offset over some short distance instead of the full range. That is a straight line
+    //    too, but a much steeper one, and it meets the flat part in a hard kink a few frames out. With
+    //    the muzzle only three units from the lens that first stub is enormously magnified: a round
+    //    fired to the LEFT appeared to set off to the right and then turn.
     for (let i = 0; i < c.projectiles.length; i++) {
       let m = projPool[i];
       if (!m) {
@@ -733,8 +836,20 @@ export function createThreeView(
       const p = c.projectiles[i];
       if (!p) continue;
       m.visible = true;
-      const k = 1 - Math.min(1, Math.hypot(p.pos.x - post.x, p.pos.y - post.y) / FIRE_BLEND);
-      m.position.set(ax(p.pos.x) + fireOffX * k, ay(p.pos.y) + fireOffY * k, ACTION_Z + 0.2 + fireOffZ * k);
+      solveMuzzle(Math.atan2(p.vel.y, p.vel.x));
+      const planeZ = ACTION_Z + 0.2;
+      const k = 1 - Math.min(1, Math.hypot(p.pos.x - post.x, p.pos.y - post.y) / AIM_RANGE);
+      m.position.set(
+        ax(p.pos.x) + (muzzle.x - ax(post.x)) * k,
+        ay(p.pos.y) + (muzzle.y - ay(post.y)) * k,
+        planeZ + (muzzle.z - planeZ) * k,
+      );
+      // Held to a constant APPARENT size. Early in its flight a round is metres from the lens rather
+      // than out over the city, and a fixed-radius sphere there is not a tracer — it is a white
+      // balloon across a fifth of the screen. Scaling by its own distance cancels the perspective
+      // divide, so what leaves the barrel is the same speck that reaches the target.
+      const near = m.position.distanceTo(camera.position);
+      m.scale.setScalar(Math.max(0.12, near / PROJ_REF_DIST));
     }
     for (let i = c.projectiles.length; i < projPool.length; i++) {
       const m = projPool[i];

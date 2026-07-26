@@ -251,6 +251,15 @@ cranes, blends, or sits inside the building. That pinned camera must be **derive
 from the director's pose** — a hand-copied duplicate will silently drift out of sync
 and break aiming.
 
+Because that camera is deliberately kept **out of the scene graph**, nothing else will
+ever refresh its world matrix — and `Raycaster.setFromCamera` reads exactly that matrix,
+both for the ray's origin and for unprojecting its direction. It must be given an explicit
+`updateMatrixWorld` after it is posed. Omitting it casts every aim from the world origin;
+with the action plane once at `z = 0` the ray began *on* the plane and every pointer
+position mapped to the same spot. `tests/e2e/aim.spec.ts` is the gate: it projects arena
+points to screen with an independently written projection, points there, and requires the
+reported aim angle to arrive.
+
 ### 3.8 Incident visual treatments
 
 How the Random Incidents area's flags look. Scene-side treatments live in the three.js
@@ -277,11 +286,22 @@ All animation is **code-driven** — there are no keyframed clips.
   dependent and is a bug.
 - **Muzzle flash:** a short emissive pop (~50 ms) on each shot, plus a small recoil
   kick on the barrel that decays out.
-- **Tracer reconciliation:** the simulation fires from a flat arena point, but the
-  visible muzzle sits on the roof at the tower's depth. A projectile carries the
-  muzzle offset at spawn and **sheds it linearly over its first stretch of travel**,
-  so a shot leaves the barrel as a straight line and settles onto its true path far
-  off-screen. Never snap a tracer back toward the post — it reads as a visual bug.
+- **Tracers follow the bore line.** The simulation fires from a flat arena point, but the
+  visible muzzle sits on the roof at the tower's depth, tens of units nearer the camera
+  than the plane the drones fly on. Each round is therefore drawn on the straight line
+  joining the two: it carries the full muzzle offset at the barrel and **sheds it linearly
+  out to the nominal engagement range**, where the barrel is looking and where the offset
+  reaches zero. Both ends move linearly with range, so what is drawn is a straight line
+  from the muzzle to the aim point, and the round is on it.
+  - The offset must come from the angle each round was **fired** at — recorded exactly in
+    its own velocity — and never from the current aim. Reading the current aim swings every
+    round in the air along with the barrel, and a gun tracking across the sky drags its
+    whole stream after it in an arc.
+  - Shedding the offset over a short distance instead of the full range is still a straight
+    line, but a much steeper one that meets the flat part in a hard kink a few frames out.
+    With the muzzle a few units from the lens that stub is enormously magnified: a round
+    fired to the left appears to set off to the right and then turn.
+  - Never snap a tracer back toward the post — it reads as a visual bug.
 - **Drones:** constant slow tumble; vertical bob is procedural, never keyframed.
 - **Skyline damage:** a slab disappearing is a *beat* — it earns a brief emphasis, not
   a silent pop.

@@ -34,6 +34,18 @@ export interface WeaponRig {
   readonly group: THREE.Group;
   /** Rotated about z to aim. The barrel models along +y, as the old one did. */
   readonly yaw: THREE.Group;
+  /**
+   * Rotated about ITS OWN x to lean the barrel away from the camera, inside `yaw`.
+   *
+   * Two axes, in this order, because the gun is aimed at a point rather than in a direction. `yaw`
+   * carries the angle the simulation actually knows — the one in the flat arena the fight is fought
+   * in — and this carries the depth the arena does not have: the post stands well in front of the
+   * plane the drones fly on, so a barrel that only ever turned in the screen plane pointed somewhere
+   * no round ever went. Nesting matters. Applied inside the yaw, this tilts the already-aimed barrel
+   * out of the screen plane; applied outside it, the tilt would swing with the aim and the gun would
+   * roll.
+   */
+  readonly pitch: THREE.Group;
   /** Distance from the yaw pivot to the muzzle, along +y in yaw space, at rest. */
   readonly muzzleReach: number;
   /** Push the current recoil and flash state into the rig. Allocation-free. */
@@ -56,9 +68,12 @@ export function createWeapon(barrelLength: number): WeaponRig {
   const group = new THREE.Group();
   const yaw = new THREE.Group();
   group.add(yaw);
+  /** Elevation out of the screen plane. See `WeaponRig.pitch` for why it lives inside the yaw. */
+  const pitch = new THREE.Group();
+  yaw.add(pitch);
   /** Moves back along the barrel under recoil; everything that fires is a child of it. */
   const recoiling = new THREE.Group();
-  yaw.add(recoiling);
+  pitch.add(recoiling);
 
   const L = barrelLength;
   const bore = L * 0.042;
@@ -209,6 +224,7 @@ export function createWeapon(barrelLength: number): WeaponRig {
   return {
     group,
     yaw,
+    pitch,
     muzzleReach,
     update(recoil: RecoilState, reducedFlash: boolean): void {
       // Recoil travels back down the barrel, which is -y in the gun's own space.

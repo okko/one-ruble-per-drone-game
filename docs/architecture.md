@@ -195,10 +195,13 @@ cinematic backdrop, not a frozen image.
 | `theme.ts` | Named scene colours, mirroring the CSS design tokens. |
 | `view.ts` | Thin façade exposing the `ThreeView` contract + the no-WebGL `noopView` fallback. Holds **no** pose logic. |
 
-**Aiming.** Pointer→arena mapping ray-casts against the fixed `z = 0` action plane through a
+**Aiming.** Pointer→arena mapping ray-casts against the fixed action plane (`ACTION_Z`) through a
 dedicated camera pinned to the director's canonical `shooting` pose. That camera must be
 derived from the director (single source of truth) and never moved, so `screenToWorld` stays
-exact while the render camera cranes and blends.
+exact while the render camera cranes and blends. Being outside the scene graph, it must also be
+given an explicit `updateMatrixWorld` once it is posed — `Raycaster.setFromCamera` reads that
+matrix for the ray's origin and direction, and nothing else will ever refresh it.
+`tests/e2e/aim.spec.ts` gates this end to end.
 
 **No-WebGL.** `createThreeView` probes for a WebGL2 context silently and returns a no-op view
 if unavailable. The simulation and the entire DOM UI keep working over a CSS gradient backdrop.

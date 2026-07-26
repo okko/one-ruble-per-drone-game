@@ -107,9 +107,11 @@ only interactive panels opt back in. A full-screen transparent overlay that eats
 **Pointer→world mapping:** compute canvas-relative coordinates from
 `getBoundingClientRect()` + `clientX/clientY` (not `offsetX/offsetY`, which differ
 across browsers), then convert to arena space via `ThreeView.screenToWorld`, which
-ray-casts against the fixed `z = 0` action plane using a camera pinned to the canonical
+ray-casts against the fixed action plane (`ACTION_Z`) using a camera pinned to the canonical
 `shooting` pose. That camera never moves, so aim stays exact while the render camera
-cranes and blends.
+cranes and blends — but it is also outside the scene graph, so it must be given an explicit
+`updateMatrixWorld` after posing or every ray is cast from the world origin.
+`tests/e2e/aim.spec.ts` runs on all four engines and is the gate.
 
 ## 5. Audio unlock & backgrounding (iOS)
 

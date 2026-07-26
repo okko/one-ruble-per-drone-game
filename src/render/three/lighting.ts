@@ -159,12 +159,14 @@ export function envStepFor(daylight: number): number {
 /**
  * Where the haze starts, in world units from the camera.
  *
- * Bounded deliberately: the shooting camera sits at `TOWER_Z + 3`, so the action plane the drones and
- * tracers fly on is 16 units away and stays *completely* clear of fog. §3.1 requires drone-vs-sky
- * contrast to survive, and a target dissolving into haze is the one thing this effect must never do.
- * The far skyline at ~32 units gets a fifth of the way to the horizon colour, which is the whole
- * intent: depth behind the fight, nothing in it.
+ * Bounded deliberately, and the bound moved when the drone field did. The shooting camera sits at
+ * `TOWER_Z + 3` and the drones now fly just in front of the skyline, so everything the player is
+ * asked to see — gun, tracers, drones, and the towers they dive at — lies inside ~33 units. §3.1
+ * requires drone-vs-sky contrast to survive, and a target dissolving into haze is the one thing this
+ * effect must never do, so the haze does not begin until past all of it. What is left to fog is the
+ * horizon ward and the ground running away behind the city, which is the whole intent: depth BEHIND
+ * the fight, nothing in it.
  */
-export const FOG_NEAR = 20;
+export const FOG_NEAR = 40;
 /** Full haze. The ground plane runs to the horizon and melts into the sky, as it should. */
-export const FOG_FAR = 75;
+export const FOG_FAR = 110;
