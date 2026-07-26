@@ -26,8 +26,8 @@
  */
 import * as THREE from 'three';
 
-import { PALETTE } from '../palette';
-import type { PaletteKey } from '../palette';
+import { WORLD } from './theme';
+import type { WorldColorKey } from './theme';
 
 /** Total height of the figure, boots to the crown of the ushanka, in world units. */
 export const SOLDIER_H = 0.58;
@@ -111,8 +111,8 @@ function damp(rate: number, dt: number): number {
   return 1 - Math.exp(-rate * dt);
 }
 
-function mat(key: PaletteKey): THREE.MeshStandardMaterial {
-  return new THREE.MeshStandardMaterial({ color: new THREE.Color(PALETTE[key]), flatShading: true });
+function mat(key: WorldColorKey): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({ color: new THREE.Color(WORLD[key]), flatShading: true });
 }
 
 function box(w: number, h: number, d: number, m: THREE.Material): THREE.Mesh {

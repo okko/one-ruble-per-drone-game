@@ -8,8 +8,6 @@
     "src/persistence/**/*.ts",
     "src/systems/**/*.ts",
     "src/content/**/*.ts",
-    "src/render/sprite-provider.ts",
-    "src/render/scaler.ts",
     "src/state/scene-manager.ts",
     "src/ui/shell/menu-model.ts",
     "src/render/three/mapping.ts",

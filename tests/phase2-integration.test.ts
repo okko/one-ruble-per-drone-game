@@ -9,7 +9,6 @@ import { describe, it, expect } from 'vitest';
 import { createRng } from '../src/core/rng';
 import { createEventBus } from '../src/core/events';
 import { loadContent } from '../src/content/loader';
-import manifest from '../src/content/assets.manifest.json';
 import { createGameState } from '../src/state/create-game-state';
 import { update as updateMeters, applyRelief, computeEffects } from '../src/systems/meters';
 import type { MetersRead } from '../src/systems/meters';
@@ -28,7 +27,7 @@ import type { GameState, IncidentsState } from '../src/state/game-state';
 import type { IncidentDef, SchedulerTunables } from '../src/content/incidents';
 
 function makeCtx(): SystemContext {
-  return { rng: createRng(0x5eed), events: createEventBus(), content: loadContent({ manifest }) };
+  return { rng: createRng(0x5eed), events: createEventBus(), content: loadContent() };
 }
 
 function forceActive(s: IncidentsState, id: string, ctx: SystemContext): void {
@@ -83,7 +82,7 @@ describe('phase 2 integration', () => {
         f.blackout = Math.max(f.blackout, 0.3);
       },
     };
-    const content = { ...loadContent({ manifest }), incidents: { catalog: [one], scheduler: fast } };
+    const content = { ...loadContent(), incidents: { catalog: [one], scheduler: fast } };
     const ctx: SystemContext = { rng: createRng(7), events: createEventBus(), content };
     const gs = createGameState(content, 7);
     registerScoring(gs, ctx);

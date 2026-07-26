@@ -17,10 +17,10 @@ describe('validateDrones', () => {
     expect(() => validateDrones(bad)).toThrow(/duplicate drone kind/);
   });
 
-  it('rejects an unknown spriteId', () => {
-    // Use a non-namespace string so the sprite-id usage scan doesn't flag this fixture.
-    const bad = [{ ...DRONES[0], spriteId: 'totally-bogus' }];
-    expect(() => validateDrones(bad)).toThrow(/unknown spriteId/);
+  it('rejects a missing kind', () => {
+    const bad = { ...(DRONES[0] as unknown as Record<string, unknown>) };
+    delete bad['kind'];
+    expect(() => validateDrones([bad])).toThrow(/kind/);
   });
 
   it('rejects an illegal movement archetype', () => {

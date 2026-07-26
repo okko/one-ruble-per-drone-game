@@ -5,9 +5,8 @@
  * from coverage/mutation and never scanned by the content-lint.
  */
 import { loadContent } from '../content/loader';
-import manifestJson from '../content/assets.manifest.json';
 import type { Content } from '../content/loader';
 
 export function createTestContent(overrides: Partial<Content> = {}): Content {
-  return { ...loadContent({ manifest: manifestJson }), ...overrides };
+  return { ...loadContent(), ...overrides };
 }

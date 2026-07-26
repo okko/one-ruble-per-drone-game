@@ -1,12 +1,12 @@
 /**
- * Content loader (docs/areas/00-core-platform.md §3.11). Loads typed data tables from raw input
- * (e.g. imported JSON), runs each domain validator, and FAILS LOUDLY at boot on malformed data
- * — never silently. The validated `Content` aggregate is exposed via SystemContext. Each domain
- * area (drones, residents, incidents, balance) adds its table + validator here as it lands; in
- * Phase 1 the only table is the art asset manifest.
+ * Content loader (docs/areas/00-core-platform.md §3.11). Runs every domain validator over the
+ * typed data tables and FAILS LOUDLY at boot on malformed data — never silently. The validated
+ * `Content` aggregate is exposed via SystemContext. Each domain area (drones, residents,
+ * incidents, balance) adds its table + validator here as it lands.
+ *
+ * There is no raw input any more: the sprite-atlas manifest went out with the Canvas-2D pipeline,
+ * so every table is a static TS module and the loader takes no arguments.
  */
-import { validateAssetManifest } from './assets-validate';
-import { ContentValidationError } from './content-error';
 import { validateMeterBalance } from './meters-validate';
 import { meterBalance } from './meters';
 import { validateResidents, validateEconomyTunables } from './residents-validate';
@@ -21,7 +21,6 @@ import { validateCombatBalance } from './balance-validate';
 import { combatBalance } from './balance';
 import { validateAudioContent } from './audio-validate';
 import { audioContent } from './audio';
-import type { AssetManifest } from './assets';
 import type { AudioContent } from './audio';
 import type { MeterBalance } from './meters';
 import type { ResidentDef, EconomyTunables } from './residents';
@@ -31,7 +30,6 @@ import type { DroneDef } from './drones';
 import type { CombatBalance } from './balance';
 
 export interface Content {
-  manifest: AssetManifest;
   meters: MeterBalance; // area 02 balance table
   economy: { roster: ResidentDef[]; tunables: EconomyTunables }; // area 03
   scoring: ScoringBalance; // area 04
@@ -41,12 +39,7 @@ export interface Content {
   audio: AudioContent; // area 06 SFX/music/ducking tables
 }
 
-export function loadContent(raw: unknown): Content {
-  if (typeof raw !== 'object' || raw === null) {
-    throw new ContentValidationError('expected an object', 'content');
-  }
-  const manifest = validateAssetManifest((raw as { manifest?: unknown }).manifest);
-  // Static TS balance tables are imported and validated here (only the manifest comes via `raw`).
+export function loadContent(): Content {
   const meters = validateMeterBalance(meterBalance);
   const economy = {
     roster: validateResidents(RESIDENTS),
@@ -60,5 +53,5 @@ export function loadContent(raw: unknown): Content {
   const drones = validateDrones(DRONES);
   const combat = validateCombatBalance(combatBalance);
   const audio = validateAudioContent(audioContent);
-  return { manifest, meters, economy, scoring, incidents, drones, combat, audio };
+  return { meters, economy, scoring, incidents, drones, combat, audio };
 }

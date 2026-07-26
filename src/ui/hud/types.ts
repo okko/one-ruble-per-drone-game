@@ -1,30 +1,20 @@
 /**
- * HUD public contract (docs/areas/10-hud-ui.md §4). The HUD is an overlay component composed by the
- * `Playing` scene: it READS `GameState` and emits player intents, but never mutates gameplay state.
- * `SettingsView` is the accessibility/keybind projection the HUD reads (sourced from the Settings repo
- * by the host). `ResidentMenuModel` is the read-only view the Economy area supplies for the panel.
+ * HUD public contract (docs/areas/10-hud-ui.md §4). The HUD is a DOM overlay driven by the
+ * `Playing` scene: it READS `GameState` and reflects it, but never mutates gameplay state.
+ * `SettingsView` is the accessibility/keybind projection the HUD reads (sourced from the Settings
+ * repo by the host). `ResidentMenuModel` is the read-only view the Economy area supplies for the
+ * resident panel.
+ *
+ * There is no `Hud` interface any more: the overlay is `src/ui/game-overlay.ts`, it draws nothing,
+ * and the Playing scene owns the interaction state it used to hold.
  */
 import type { GameState } from '../../state/game-state';
-import type { Renderer } from '../../render/renderer';
-import type { InputEvent } from '../../input/input';
 
 export interface SettingsView {
   reducedFlash: boolean;
   largeHudText: boolean;
   pauseWhilePanelOpen: boolean;
   residentPanelKey: string; // default 'KeyE'
-}
-
-export interface Hud {
-  /** Advance HUD animations; reads (never mutates) state. */
-  update(dt: number, state: GameState): void;
-  /** Draw the overlay above the world. */
-  render(r: Renderer, state: GameState): void;
-  /** Returns true if the event was consumed by the panel; false → passes to the gun. */
-  onInput(e: InputEvent, state: GameState): boolean;
-  isPanelOpen(): boolean;
-  /** True only when the panel is open AND pauseWhilePanelOpen is set. */
-  wantsPause(): boolean;
 }
 
 /** Read-only menu view the HUD consumes from the Economy area (Economy computes it). */

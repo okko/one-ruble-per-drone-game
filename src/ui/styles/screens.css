@@ -54,23 +54,28 @@
   display: none;
 }
 
-/* Selection bob. Applied to the selected item only, and disabled wholesale by
-   the reduced-motion attribute in tokens.css. */
+/* Selection bob. It animates a caret pseudo-element rather than the button, so
+   the tap target never moves under a finger mid-press (and an automated click is
+   never chasing a target that is still travelling). Disabled wholesale by the
+   reduced-motion attribute in tokens.css. */
 @keyframes menu-bob {
   0%,
   100% {
-    transform: translateX(var(--sp-2));
+    transform: translateX(0);
   }
   50% {
-    transform: translateX(calc(var(--sp-2) + 3px));
+    transform: translateX(3px);
   }
 }
 
-.ui-menu-item[aria-selected='true'] {
+.ui-menu-item[aria-selected='true']::before {
+  content: '▸';
+  display: inline-block;
+  color: var(--c-accent);
   animation: menu-bob 1.6s var(--ease-in-out) infinite;
 }
 
-:root[data-reduced-motion='true'] .ui-menu-item[aria-selected='true'] {
+:root[data-reduced-motion='true'] .ui-menu-item[aria-selected='true']::before {
   animation: none;
 }
 

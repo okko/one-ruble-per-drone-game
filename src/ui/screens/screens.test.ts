@@ -136,6 +136,25 @@ describe('main menu screen', () => {
     screen.update(menuVM({ muted: true }));
     expect(root.querySelector<HTMLElement>('.menu-mute')?.hidden).toBe(false);
   });
+
+  it('points at the selection with aria-activedescendant instead of focusing an option', () => {
+    const { screen } = mount();
+    const menu = root.querySelector<HTMLElement>('.ui-menu');
+    const items = root.querySelectorAll<HTMLButtonElement>('.ui-menu-item');
+    expect(menu?.getAttribute('aria-activedescendant')).toBe(items[0]?.id);
+    screen.update(menuVM({ selectedIndex: 1 }));
+    expect(menu?.getAttribute('aria-activedescendant')).toBe(items[1]?.id);
+    expect(document.activeElement).not.toBe(items[1]);
+  });
+
+  it('lets the scene own Enter, so a focused option cannot confirm a second time', () => {
+    const { onConfirm } = mount();
+    const first = root.querySelector<HTMLButtonElement>('.ui-menu-item');
+    const enter = new KeyboardEvent('keydown', { key: 'Enter', cancelable: true, bubbles: true });
+    first?.dispatchEvent(enter);
+    expect(enter.defaultPrevented).toBe(true);
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
 });
 
 describe('name entry screen', () => {

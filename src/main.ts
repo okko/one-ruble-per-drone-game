@@ -29,7 +29,6 @@ import { createGameOverScene } from './state/game-over-scene';
 import { createMainMenuScene } from './ui/main-menu-scene';
 import { createHighscoreEntryScene } from './ui/highscores/entry-scene';
 import { createHighscoresListScene } from './ui/highscores/list-scene';
-import manifestJson from './content/assets.manifest.json';
 import type { SystemContext } from './core/system-context';
 import type { GameState } from './state/game-state';
 
@@ -57,7 +56,7 @@ function main(): void {
   // Core substrate + injected context.
   const rng = createRng(0x1234abcd);
   const events = createEventBus();
-  const content = loadContent({ manifest: manifestJson }); // throws loudly on malformed data
+  const content = loadContent(); // throws loudly on malformed data
   const ctx: SystemContext = { rng, events, content };
 
   // Persistence.
@@ -155,14 +154,19 @@ function main(): void {
     createInput(
       canvas3d,
       { screenToWorld: (sx, sy) => (view ? view.screenToWorld(sx, sy) : { x: 192, y: 108 }) },
-      {
-        onEvent: (e) => manager.routeInput(e),
-        // iOS unlocks the AudioContext only from a synchronous in-gesture resume (compatibility.md §5).
-        onFirstGesture: () => {
-          void audio.unlock();
-        },
-      },
+      { onEvent: (e) => manager.routeInput(e) },
     );
+  }
+
+  // Audio unlock is bound to the document, not the canvas: on a touch device the very first gesture
+  // of a session is a tap on a menu button, which the modal UI layer consumes before the canvas ever
+  // sees it. iOS only resumes an AudioContext from a synchronous in-gesture call
+  // (compatibility.md §5), so this listener must be the one that runs first, and only once.
+  const unlockAudio = (): void => {
+    void audio.unlock();
+  };
+  for (const type of ['pointerdown', 'keydown'] as const) {
+    document.addEventListener(type, unlockAudio, { once: true, capture: true });
   }
 
   // Viewport: drive resize from visualViewport (handles the iOS URL-bar reflow). The rotate overlay

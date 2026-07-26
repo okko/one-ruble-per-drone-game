@@ -236,6 +236,14 @@ leaving the roof.
   and touch all drive the same pure model. There is no separate touch code path.
 - **Focus is always visible** and never lost: mounting a screen focuses its first
   actionable element; overlays trap focus and restore it on close.
+- **The scene owns activation, the DOM only reports it.** A list screen focuses the
+  *container* and marks its selection with `aria-activedescendant`; it never focuses an
+  option element. A focused `<button>` self-activates on Enter/Space, which would confirm
+  a second time on the very keypress the scene is already routing — so options also
+  cancel the default action of those keys.
+- **Decorative motion never moves a hit target.** The selection bob animates a caret
+  pseudo-element, not the button box, so the tap target holds still under a finger (and
+  under an automated click, which waits for the element to stop moving).
 - **`reducedMotion`** neutralises the motion tokens — transitions become instant,
   decorative animation stops — without changing layout or hiding information.
 - **`reducedFlash`** removes strobing everywhere and caps the render quality tier.

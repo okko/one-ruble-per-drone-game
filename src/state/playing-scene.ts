@@ -301,7 +301,7 @@ export function createPlayingScene(opts: PlayingSceneOptions = {}): Scene {
       feedback = null;
       opts.audio?.setScene('Playing');
       opts.overlay?.setVisible(true);
-      opts.view?.setVisible(true);
+      // The world is never hidden — it is the backdrop behind every screen — so only the camera moves.
       opts.view?.startIntro(); // opening fly-up from the ground floor to the rooftop post
     },
 
@@ -369,7 +369,6 @@ export function createPlayingScene(opts: PlayingSceneOptions = {}): Scene {
       txnOffs.length = 0;
       opts.audio?.setScene('MainMenu');
       opts.overlay?.setVisible(false);
-      opts.view?.setVisible(false);
       gs = null;
     },
   };

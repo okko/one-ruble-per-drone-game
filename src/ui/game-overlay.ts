@@ -10,7 +10,6 @@
  * current floor's resident (name + buy/beg options with the selected row highlighted).
  */
 import './styles/tokens.css';
-import { METER_DISPLAY_ORDER } from './hud/theme';
 import type { Content } from '../content/loader';
 import type { GameState } from '../state/game-state';
 import type { PlayingViewState, FeedbackTone } from '../state/playing-view';
@@ -40,6 +39,9 @@ const T = {
 } as const;
 
 const METER_EMOJI: Record<MeterKey, string> = { sleep: '😴', hunger: '🍞', thirst: '💧', vice: '🚬', poo: '💩' };
+
+/** Fixed top-to-bottom order (docs/areas/10-hud-ui.md §5); a meter never moves row between frames. */
+const METER_DISPLAY_ORDER: readonly MeterKey[] = ['sleep', 'hunger', 'thirst', 'vice', 'poo'];
 
 const TONE_COLOR: Record<FeedbackTone, string> = {
   cost: T.accent,

@@ -1,13 +1,16 @@
 /**
- * The canonical color palette (docs/areas/11-art-visual-style.md §3.2). Bright, saturated
- * SNES-era hues. Code references palette KEYS, never raw hex literals.
+ * The three.js world's colour theme (docs/areas/11-art-visual-style.md §3.2). Bright, saturated
+ * hues for materials, lights and the sky; code references theme KEYS, never raw hex literals.
  *
- * Budget: ≤ 32 unique hex values (enforced by palette.test.ts). The §3.2 table lists ~39 keys,
- * so several near-duplicate keys deliberately share a hex value (the doc's suggested approach,
- * e.g. `windowLit` reuses `explYellow`). Keys stay distinct so call sites read meaningfully;
- * only the hex values dedupe.
+ * This is the WORLD only. Everything in the DOM — screens and HUD alike — takes its colours from
+ * `src/ui/styles/tokens.css`, so the two never fight over one constant.
+ *
+ * Budget: ≤ 32 unique hex values (enforced by theme.test.ts). The §3.2 table lists ~39 keys, so
+ * several near-duplicate keys deliberately share a hex value (the doc's suggested approach, e.g.
+ * `windowLit` reuses `explYellow`). Keys stay distinct so call sites read meaningfully; only the
+ * hex values dedupe.
  */
-export const PALETTE = Object.freeze({
+export const WORLD = Object.freeze({
   // Line/shadow
   ink: '#1a1c2c',
   shadow: '#2b2f4a',
@@ -62,4 +65,4 @@ export const PALETTE = Object.freeze({
   meterCrit: '#ff3b3b',
 } as const);
 
-export type PaletteKey = keyof typeof PALETTE;
+export type WorldColorKey = keyof typeof WORLD;

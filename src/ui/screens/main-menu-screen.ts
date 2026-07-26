@@ -46,7 +46,10 @@ export interface MainMenuScreenDeps {
 export function createMainMenuScreen(deps: MainMenuScreenDeps): UiScreen<MainMenuVM> {
   const title = el('h1', { class: 'ui-title' });
   const tagline = el('p', { class: 'ui-tagline' });
-  const list = el('div', { class: 'ui-menu', role: 'menu' });
+  // The menu itself holds focus and points at the selected option with `aria-activedescendant`.
+  // The options are never focused individually: a focused <button> would also fire its own click
+  // on the very keypress the scene is already handling, which double-activates the menu.
+  const list = el('div', { class: 'ui-menu', role: 'menu', tabindex: '-1' });
   const footer = el('div', { class: 'screen-footer' });
   const muteBadge = el(
     'div',
@@ -103,6 +106,7 @@ export function createMainMenuScreen(deps: MainMenuScreenDeps): UiScreen<MainMen
           class: 'ui-menu-item',
           type: 'button',
           role: 'menuitem',
+          id: `menu-item-${item.id}`,
           'data-item': item.id,
           text: item.label,
         }) as HTMLButtonElement,
@@ -112,6 +116,12 @@ export function createMainMenuScreen(deps: MainMenuScreenDeps): UiScreen<MainMen
       // Hover selects but never activates: a pointer sliding across the list must
       // not fire an option the player only passed over.
       b.addEventListener('pointerenter', () => deps.onSelect(i));
+      // A focused <button> self-activates on Enter/Space, and the scene already routes those keys
+      // through the shared input stream. Without this, one keypress confirms twice — which showed
+      // up as the menu skipping a screen the instant it regained focus.
+      b.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') e.preventDefault();
+      });
     });
     list.replaceChildren(...buttons);
   }
@@ -166,6 +176,8 @@ export function createMainMenuScreen(deps: MainMenuScreenDeps): UiScreen<MainMen
         b.setAttribute('aria-disabled', String(!item.enabled));
         b.disabled = !item.enabled;
       });
+      const selected = buttons[vm.selectedIndex];
+      if (selected) list.setAttribute('aria-activedescendant', selected.id);
 
       if (howToList.childElementCount !== vm.howTo.length) {
         howToList.replaceChildren(...vm.howTo.map((line) => el('li', { text: line })));
@@ -184,9 +196,9 @@ export function createMainMenuScreen(deps: MainMenuScreenDeps): UiScreen<MainMen
       if (vm.panel !== shownPanel) {
         shownPanel = vm.panel;
         root.replaceChildren(views[vm.panel], footer);
-        // Returning to the root menu re-focuses the selected option, so a player
-        // who closed a panel with the keyboard is not stranded on <body>.
-        if (vm.panel === 'none') buttons[vm.selectedIndex]?.focus();
+        // Returning to the root menu re-focuses the menu, so a player who closed a
+        // panel with the keyboard is not stranded on <body>.
+        if (vm.panel === 'none') list.focus();
       }
     },
 

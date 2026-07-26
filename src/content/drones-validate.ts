@@ -1,13 +1,12 @@
 /**
- * Validator for the drone catalog (docs/areas/01-gameplay-engine.md §5). Confirms unique kinds, a
- * known sprite id, sane stats, a legal movement archetype, and that `weightAtD` is a function
- * returning a finite non-negative weight. (Catalog entries hold a function, so the value passes
- * through unchanged.) The `kind ∈ scoringBalance.basePoints` cross-check lives in an integration test
- * to avoid coupling this validator to the scoring table. Throws `ContentValidationError`.
+ * Validator for the drone catalog (docs/areas/01-gameplay-engine.md §5). Confirms unique kinds,
+ * sane stats, a legal movement archetype, and that `weightAtD` is a function returning a finite
+ * non-negative weight. (Catalog entries hold a function, so the value passes through unchanged.)
+ * The `kind ∈ scoringBalance.basePoints` cross-check lives in an integration test to avoid coupling
+ * this validator to the scoring table. Throws `ContentValidationError`.
  */
 import { ContentValidationError } from './content-error';
 import { asArray, asObject, num, str, isFiniteNumber, oneOf } from './validate-helpers';
-import { isKnownSpriteId } from './sprite-ids';
 import type { DroneDef } from './drones';
 import type { MovementKind } from '../state/game-state';
 
@@ -25,11 +24,6 @@ export function validateDrones(raw: unknown): DroneDef[] {
     const kind = str(def, 'kind', path);
     if (seen.has(kind)) throw new ContentValidationError(`duplicate drone kind "${kind}"`, path);
     seen.add(kind);
-
-    const spriteId = str(def, 'spriteId', path);
-    if (!isKnownSpriteId(spriteId)) {
-      throw new ContentValidationError(`unknown spriteId "${spriteId}"`, `${path}.spriteId`);
-    }
 
     num(def, 'baseHp', path, { min: 1 });
     num(def, 'baseSpeed', path, { min: 0 });

@@ -20,8 +20,8 @@
  * (tests / the cross-browser smoke's `__combat` hook) keeps running without a renderer.
  */
 import * as THREE from 'three';
-import { PALETTE } from '../palette';
-import type { PaletteKey } from '../palette';
+import { WORLD } from './theme';
+import type { WorldColorKey } from './theme';
 import { daylightAt } from '../../core/difficulty';
 import type { Content } from '../../content/loader';
 import type { GameState } from '../../state/game-state';
@@ -66,28 +66,23 @@ export interface ThreeView {
   setCameraState(state: CameraState): void;
   /** Begin the opening fly-up (ground floor → rooftop post); called when a run starts. */
   startIntro(): void;
-  setVisible(visible: boolean): void;
   dispose(): void;
 }
 
-function col(key: PaletteKey): THREE.Color {
-  return new THREE.Color(PALETTE[key]);
+function col(key: WorldColorKey): THREE.Color {
+  return new THREE.Color(WORLD[key]);
 }
 
 // A renderer-less stand-in used when WebGL is unavailable (headless/unsupported engines, e.g. CI
-// Firefox without a GL context). The sim keeps running; the world just isn't drawn. setVisible still
-// toggles the canvas so the in-game surface shows while Playing (the HUD overlays it as usual) — the
-// §8.16 smoke expects #game3d shown during a run regardless of whether GL actually drew into it.
-function noopView(canvas: HTMLCanvasElement): ThreeView {
+// Firefox without a GL context). The sim keeps running; the world just isn't drawn, and every screen
+// still works because they are DOM over a canvas that simply stays black.
+function noopView(): ThreeView {
   return {
     resize() {},
     screenToWorld: () => ({ x: ARENA_CX, y: POST_Y }),
     render() {},
     setCameraState() {},
     startIntro() {},
-    setVisible(visible: boolean): void {
-      canvas.style.display = visible ? 'block' : 'none';
-    },
     dispose() {},
   };
 }
@@ -110,13 +105,13 @@ export function createThreeView(canvas: HTMLCanvasElement, content: Content): Th
   } catch {
     gl = null;
   }
-  if (!gl) return noopView(canvas); // no WebGL (headless/unsupported) — keep the sim running renderer-less
+  if (!gl) return noopView(); // no WebGL (headless/unsupported) — keep the sim running renderer-less
 
   let renderer: THREE.WebGLRenderer;
   try {
     renderer = new THREE.WebGLRenderer({ canvas, context: gl, antialias: true, powerPreference: 'high-performance' });
   } catch {
-    return noopView(canvas); // GL present but renderer init failed — keep the sim running renderer-less
+    return noopView(); // GL present but renderer init failed — keep the sim running renderer-less
   }
   renderer.setPixelRatio(Math.min(typeof window !== 'undefined' ? window.devicePixelRatio : 1, 3));
 
@@ -324,7 +319,7 @@ export function createThreeView(canvas: HTMLCanvasElement, content: Content): Th
   const projMat = new THREE.MeshBasicMaterial({ color: col('flash') });
   const projPool: THREE.Mesh[] = [];
 
-  function droneColorKey(kind: string): PaletteKey {
+  function droneColorKey(kind: string): WorldColorKey {
     switch (kind) {
       case 'heavy':
         return 'droneBoss';
@@ -560,9 +555,6 @@ export function createThreeView(canvas: HTMLCanvasElement, content: Content): Th
     startIntro(): void {
       introT = 0;
       director.setState('intro', { immediate: true });
-    },
-    setVisible(visible: boolean): void {
-      canvas.style.display = visible ? 'block' : 'none';
     },
     dispose(): void {
       soldier.dispose();

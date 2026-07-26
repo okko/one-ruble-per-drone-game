@@ -270,7 +270,7 @@ export interface SceneManager {
 export function createSceneManager(ctx: SystemContext, initial?: SceneId): SceneManager;
 
 // content/loader.ts
-export function loadContent(raw: unknown): Content;   // throws on invalid data
+export function loadContent(): Content;   // validates the static tables; throws on invalid data
 ```
 
 `SystemContext` and `GameState` are defined here per `architecture.md` §4.
