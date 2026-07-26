@@ -18,6 +18,7 @@
     "src/render/three/texgen.ts",
     "src/render/three/city-layout.ts",
     "src/render/three/recoil.ts",
+    "src/render/three/vfx.ts",
     "!src/**/*.test.ts",
     "!src/test-support/**/*.ts"
   ],

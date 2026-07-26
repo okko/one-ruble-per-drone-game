@@ -21,7 +21,6 @@
  */
 import * as THREE from 'three';
 import { colorOf, mixInto } from './theme';
-import type { WorldColorKey } from './theme';
 import { daylightAt, dayCycleAt } from '../../core/difficulty';
 import type { Content } from '../../content/loader';
 import type { GameState } from '../../state/game-state';
@@ -55,6 +54,8 @@ import { createCity } from './city';
 import { createRooftop } from './rooftop';
 import { createWeapon } from './weapon';
 import { advanceRecoil, createRecoil, kickRecoil } from './recoil';
+import { createDrones, type DroneSighting } from './drones';
+import { createVfx } from './particles';
 import { loadDetailTextures, type DetailTextures } from './assets';
 import {
   createTierGovernor,
@@ -429,29 +430,19 @@ export function createThreeView(
     if (o instanceof THREE.Mesh) o.castShadow = true;
   });
 
-  // ---- Pools: drones + projectiles ----------------------------------------------------------
-  const droneGeo = new THREE.IcosahedronGeometry(0.55, 0);
-  const dronePool: THREE.Mesh[] = [];
+  // ---- Pools: drones, projectiles, particles ---------------------------------------------------
+  // `DRONE_CAPACITY` is a ceiling on what will be DRAWN, not on what the sim may spawn: the flight
+  // hides surplus rather than refusing it, so an unexpected wave costs frames, never correctness.
+  const DRONE_CAPACITY = 24;
+  const drones = createDrones(scene, DRONE_CAPACITY);
+  const sightings: DroneSighting[] = [];
+  /** Drones drawn last frame, by id. What LEAVES this map is what exploded. */
+  const lastSeen = new Map<number, { pos: { x: number; y: number }; radius: number }>();
+  const seenNow = new Set<number>();
+  const vfx = createVfx(scene);
   const projGeo = new THREE.SphereGeometry(0.12, 6, 4);
   const projMat = new THREE.MeshBasicMaterial({ color: colorOf('flash') });
   const projPool: THREE.Mesh[] = [];
-
-  function droneColorKey(kind: string): WorldColorKey {
-    switch (kind) {
-      case 'heavy':
-        return 'droneBoss';
-      case 'kamikaze':
-        return 'droneBomber';
-      case 'frenzy':
-        return 'droneSwarm';
-      case 'boss':
-        return 'droneBoss';
-      case 'decoy_bird':
-        return 'cream';
-      default:
-        return 'droneScout';
-    }
-  }
 
   // ---- Camera --------------------------------------------------------------------------------
   // One director owns every framing (menu orbit, opening crane, shooting, interior, pause). See
@@ -676,30 +667,32 @@ export function createThreeView(
     // tower has lost four floors" became one integer instead of a hundred visibility flags.
     city.update(c.skyline.buildings, rig.windowGlow);
 
-    // Drones.
-    for (let i = 0; i < c.drones.length; i++) {
-      let m = dronePool[i];
-      if (!m) {
-        m = new THREE.Mesh(droneGeo, new THREE.MeshStandardMaterial({ flatShading: true }));
-        dronePool.push(m);
-        scene.add(m);
-      }
-      const d = c.drones[i];
-      if (!d) continue;
-      m.visible = true;
-      m.position.set(ax(d.pos.x), ay(d.pos.y), ACTION_Z);
-      const scale = Math.max(0.6, d.radius / 5);
-      m.scale.setScalar(scale);
-      m.rotation.x += 0.05;
-      m.rotation.y += 0.07;
-      if (m.material instanceof THREE.MeshStandardMaterial) {
-        m.material.color.copy(colorOf(d.colorTag !== undefined ? 'accentPink' : droneColorKey(d.kind)));
-      }
+    // Drones. Silhouettes and rotors are ./drones' business; what this loop owns is the mapping from
+    // arena space into the action plane, and noticing that a drone the sim was drawing last frame is
+    // gone this frame — which is the only signal the render side gets that something was destroyed.
+    sightings.length = 0;
+    seenNow.clear();
+    for (const d of c.drones) {
+      seenNow.add(d.id);
+      lastSeen.set(d.id, d);
+      sightings.push({
+        kind: d.kind,
+        x: ax(d.pos.x),
+        y: ay(d.pos.y),
+        z: ACTION_Z,
+        radius: d.radius,
+        colorTag: d.colorTag !== undefined,
+      });
     }
-    for (let i = c.drones.length; i < dronePool.length; i++) {
-      const m = dronePool[i];
-      if (m) m.visible = false;
+    for (const [id, d] of lastSeen) {
+      if (seenNow.has(id)) continue;
+      lastSeen.delete(id);
+      // A drone leaves the list when it is shot down AND when it reaches its target and detonates.
+      // Both are explosions from where the player is sitting, so both get one.
+      vfx.explode(ax(d.pos.x), ay(d.pos.y), ACTION_Z, d.radius / 5);
     }
+    drones.update(sightings, now);
+    vfx.advance(dt);
 
     // Gun aim + muzzle flash. The barrel models +y; arena angle θ maps to world dir (cosθ, -sinθ)
     // (arena y is down, world y is up), i.e. a z-rotation of -(θ + π/2) from the +y rest pose. The
@@ -815,6 +808,8 @@ export function createThreeView(
       city.dispose();
       rooftop.dispose();
       weapon.dispose();
+      drones.dispose();
+      vfx.dispose();
       detail?.dispose();
       chain.dispose();
       renderer.dispose();
